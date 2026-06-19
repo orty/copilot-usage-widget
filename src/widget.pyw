@@ -290,6 +290,61 @@ def record_notified(
     return updated
 
 
+# ── Rendering (Pillow) ────────────────────────────────────────────────────────
+def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
+    h = hex_color.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def render_pill_bar(
+    width: int,
+    height: int,
+    percent_used: float,
+    color: str,
+    stale: bool = False,
+) -> object:
+    """Render an anti-aliased pill-shaped progress bar at 4× supersample."""
+    from PIL import Image, ImageDraw, ImageTk
+
+    scale = 4
+    W, H = width * scale, height * scale
+    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    bg = (60, 60, 60, 255)
+    fg = _hex_to_rgb(color) + (180 if stale else 255,)
+    fill_w = int(W * max(0.0, min(1.0, percent_used / 100.0)))
+    radius = H // 2
+
+    # Background pill
+    draw.rounded_rectangle([0, 0, W - 1, H - 1], radius=radius, fill=bg)
+    # Filled portion
+    if fill_w > 0:
+        clip_img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        clip_draw = ImageDraw.Draw(clip_img)
+        clip_draw.rounded_rectangle([0, 0, W - 1, H - 1], radius=radius, fill=fg)
+        mask = Image.new("L", (W, H), 0)
+        mask_draw = ImageDraw.Draw(mask)
+        mask_draw.rectangle([0, 0, fill_w, H], fill=255)
+        img.paste(clip_img, mask=mask)
+
+    img = img.resize((width, height), Image.LANCZOS)
+    return ImageTk.PhotoImage(img)
+
+
+def render_dot(size: int, alpha: int) -> object:
+    """Render a circular pulsing dot at given alpha (0-255)."""
+    from PIL import Image, ImageDraw, ImageTk
+
+    scale = 4
+    S = size * scale
+    img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.ellipse([0, 0, S - 1, S - 1], fill=(150, 150, 150, alpha))
+    img = img.resize((size, size), Image.LANCZOS)
+    return ImageTk.PhotoImage(img)
+
+
 # ── Guard — everything below this line only runs when launched directly ────────
 if __name__ == "__main__":
     pass
