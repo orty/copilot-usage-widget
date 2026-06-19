@@ -109,7 +109,10 @@ def ensure_authenticated(config: AppConfig) -> str:
         return token
 
     # gh installed but not logged in — trigger device flow
-    subprocess.run(["gh", "auth", "login", "--web"], check=False)
+    try:
+        subprocess.run(["gh", "auth", "login", "--web"], check=False, timeout=300)
+    except subprocess.TimeoutExpired:
+        pass
     token = get_gh_token()
     if token:
         config.oauth_token = token
@@ -421,13 +424,15 @@ if __name__ == "__main__":
 
     # ── Toast notifications ────────────────────────────────────────────────────
     def send_toast(title: str, message: str) -> None:
+        safe_title = title.replace('"', "'")
+        safe_message = message.replace('"', "'").replace('$', '`$')
         ps = (
             "[Windows.UI.Notifications.ToastNotificationManager, "
             "Windows.UI.Notifications, ContentType=WindowsRuntime] | Out-Null\n"
             "$t = [Windows.UI.Notifications.ToastNotificationManager]::"
             "GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)\n"
-            f'$t.SelectSingleNode(\'//text[@id="1"]\').InnerText = "{title}"\n'
-            f'$t.SelectSingleNode(\'//text[@id="2"]\').InnerText = "{message}"\n'
+            f'$t.SelectSingleNode(\'//text[@id="1"]\').InnerText = "{safe_title}"\n'
+            f'$t.SelectSingleNode(\'//text[@id="2"]\').InnerText = "{safe_message}"\n'
             "$n = [Windows.UI.Notifications.ToastNotification]::new($t)\n"
             '[Windows.UI.Notifications.ToastNotificationManager]::'
             'CreateToastNotifier("Copilot Usage").Show($n)'
@@ -460,6 +465,8 @@ if __name__ == "__main__":
             self._dot_image = None
             self._dot_alpha = 255
             self._dot_direction = -1
+            self._last_bars: list = []
+            self._last_reset: str = ""
 
             self._frame = tk.Frame(self.root, bg=BG)
             self._frame.pack(padx=PAD, pady=PAD)
@@ -658,13 +665,15 @@ if __name__ == "__main__":
             except RuntimeError:
                 stale = True
                 bars = getattr(self, "_last_bars", [])
+                if not bars:
+                    self.root.title("Copilot Usage — Check gh auth")
                 reset_date_utc = getattr(self, "_last_reset", "")
 
             if bars:
                 self._last_bars = bars
                 self._last_reset = reset_date_utc
                 self.update_bars(bars, reset_date_utc, stale=stale)
-                self.set_taskbar_progress(int(bars[0].percent_used), 100)
+                self.set_taskbar_progress(int(max(b.percent_used for b in bars)), 100)
             self._schedule_next_poll()
 
         def _schedule_next_poll(self):
@@ -693,7 +702,8 @@ if __name__ == "__main__":
                 if stale:
                     count_text += " ⚠ stale"
                 w["count_lbl"].configure(text=count_text)
-                w["reset_lbl"].configure(text=f"reset {reset_date_utc[:10]} ({calc_reset_countdown(reset_date_utc)})")
+                reset_text = f"reset {reset_date_utc[:10]} ({calc_reset_countdown(reset_date_utc)})" if reset_date_utc else "reset unknown"
+                w["reset_lbl"].configure(text=reset_text)
 
         def pulse_dot(self):
             self._dot_alpha = max(40, min(255, self._dot_alpha + self._dot_direction * 15))
