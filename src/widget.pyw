@@ -48,6 +48,8 @@ class AppConfig:
     notified: dict = field(default_factory=dict)
     countdown_display: str = "dot"   # "dot" | "numeric"
     show_in_taskbar: bool = False
+    window_width: int = -1
+    window_height: int = -1
 
 
 # ── Config I/O ─────────────────────────────────────────────────────────────────
@@ -63,6 +65,8 @@ def load_config() -> AppConfig:
             notified=raw.get("notified", {}),
             countdown_display=raw.get("countdown_display", "dot"),
             show_in_taskbar=raw.get("show_in_taskbar", False),
+            window_width=raw.get("window_width", -1),
+            window_height=raw.get("window_height", -1),
         )
     except (FileNotFoundError, json.JSONDecodeError):
         return AppConfig()
@@ -79,6 +83,8 @@ def save_config(config: AppConfig) -> None:
         "notified": config.notified,
         "countdown_display": config.countdown_display,
         "show_in_taskbar": config.show_in_taskbar,
+        "window_width": config.window_width,
+        "window_height": config.window_height,
     }, indent=2))
 
 
@@ -312,8 +318,12 @@ def render_pill_bar(
     percent_used: float,
     color: str,
     stale: bool = False,
+    overlay_text: str = "",
 ) -> object:
-    """Render an anti-aliased pill-shaped progress bar at 4× supersample."""
+    """Render an anti-aliased pill-shaped progress bar at 4× supersample.
+
+    overlay_text is drawn centered on the bar at final resolution.
+    """
     from PIL import Image, ImageDraw, ImageTk
 
     scale = 4
@@ -339,6 +349,16 @@ def render_pill_bar(
         img.paste(clip_img, mask=mask)
 
     img = img.resize((width, height), Image.LANCZOS)
+
+    # Overlay text centered on final-resolution image
+    if overlay_text:
+        d = ImageDraw.Draw(img)
+        bbox = d.textbbox((0, 0), overlay_text)
+        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        tx, ty = (width - tw) // 2, (height - th) // 2 - 1
+        d.text((tx + 1, ty + 1), overlay_text, fill=(0, 0, 0, 160))   # shadow
+        d.text((tx, ty), overlay_text, fill=(255, 255, 255, 230))
+
     return ImageTk.PhotoImage(img)
 
 
@@ -575,6 +595,27 @@ if __name__ == "__main__":
                 except Exception:
                     pass
 
+        def _show_tooltip(self, widget: tk.Widget, text: str) -> None:
+            def on_enter(e):
+                tip = tk.Toplevel(self.root)
+                tip.wm_overrideredirect(True)
+                tip.attributes("-topmost", True)
+                tip.configure(bg="#333333")
+                lbl = tk.Label(tip, text=text, bg="#333333", fg="#ffffff",
+                               font=FONT_SMALL, padx=6, pady=3)
+                lbl.pack()
+                x = widget.winfo_rootx() + 4
+                y = widget.winfo_rooty() - tip.winfo_reqheight() - 4
+                tip.geometry(f"+{x}+{y}")
+                widget._tip = tip
+            def on_leave(e):
+                tip = getattr(widget, "_tip", None)
+                if tip:
+                    tip.destroy()
+                    widget._tip = None
+            widget.bind("<Enter>", on_enter)
+            widget.bind("<Leave>", on_leave)
+
         def _rebuild_essential_frame(self, bars: list[QuotaBar]):
             for w in self._frame.winfo_children():
                 w.destroy()
@@ -592,28 +633,24 @@ if __name__ == "__main__":
                 bar_lbl = tk.Label(col_frame, bg=BG)
                 bar_lbl.pack(anchor="w")
 
-                count_lbl = tk.Label(col_frame, text="", bg=BG, fg=FG, font=FONT_SMALL)
-                count_lbl.pack(anchor="w")
-
                 reset_lbl = tk.Label(col_frame, text="", bg=BG, fg="#888888", font=FONT_SMALL)
                 reset_lbl.pack(anchor="w")
 
                 self._bar_widgets.append({
                     "bar_lbl": bar_lbl,
-                    "count_lbl": count_lbl,
                     "reset_lbl": reset_lbl,
                 })
 
-            # Dot indicator (refresh pulse)
-            self._dot_lbl = tk.Label(self._frame, bg=BG, width=DOT_SIZE, height=DOT_SIZE)
-            self._dot_lbl.grid(row=0, column=len(bars), padx=(PAD, 0), sticky="s")
+            # Pulsing dot
+            self._dot_lbl = tk.Label(self._frame, bg=BG)
+            self._dot_lbl.grid(row=1, column=len(bars), padx=(PAD, 0), sticky="w")
 
             # Hamburger menu button
-            menu_btn = tk.Label(self._frame, text="≡", bg=BG, fg="#666666",
-                                font=FONT_MENU, cursor="hand2")
-            menu_btn._is_menu_btn = True  # skip drag binding
+            menu_btn = tk.Label(self._frame, text="≡", bg="#2a2a2a", fg="#cccccc",
+                                font=FONT_LABEL, cursor="hand2", padx=3)
+            menu_btn._is_menu_btn = True
             menu_btn.bind("<Button-1>", lambda e: self._show_context_menu(e))
-            menu_btn.grid(row=0, column=len(bars) + 1, padx=(2, 0), sticky="s")
+            menu_btn.grid(row=0, column=len(bars), padx=(PAD, 0), sticky="ne")
             self._bind_widgets(self._frame)
 
         def _rebuild_standard_frame(self, bars: list[QuotaBar]):
@@ -622,18 +659,14 @@ if __name__ == "__main__":
             self._bar_widgets.clear()
             self._bar_images.clear()
 
-            # Standard mode: title bar row, then bars stacked vertically
-            title_lbl = tk.Label(
-                self._frame, text="Copilot Usage", bg=BG, fg=FG,
-                font=FONT_TITLE,
-            )
-            title_lbl.grid(row=0, column=0, sticky="w", pady=(0, PAD))
-
-            menu_btn = tk.Label(self._frame, text="≡", bg=BG, fg="#666666",
-                                font=FONT_MENU, cursor="hand2")
+            # Header row: title + ≡
+            hdr = tk.Frame(self._frame, bg=BG)
+            hdr.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, PAD))
+            tk.Label(hdr, text="Copilot Usage", bg=BG, fg=FG, font=FONT_TITLE).pack(side="left")
+            menu_btn = tk.Label(hdr, text="≡", bg=BG, fg="#aaaaaa", font=FONT_MENU, cursor="hand2")
             menu_btn._is_menu_btn = True
             menu_btn.bind("<Button-1>", lambda e: self._show_context_menu(e))
-            menu_btn.grid(row=0, column=1, sticky="e", pady=(0, PAD))
+            menu_btn.pack(side="right")
 
             for i, bar in enumerate(bars):
                 row = i + 1
@@ -643,15 +676,11 @@ if __name__ == "__main__":
                 bar_lbl = tk.Label(self._frame, bg=BG)
                 bar_lbl.grid(row=row, column=1, sticky="w", padx=(PAD, 0))
 
-                count_lbl = tk.Label(self._frame, text="", bg=BG, fg=FG, font=FONT_SMALL)
-                count_lbl.grid(row=row + 100, column=0, columnspan=2, sticky="w")
-
                 reset_lbl = tk.Label(self._frame, text="", bg=BG, fg="#888888", font=FONT_SMALL)
-                reset_lbl.grid(row=row + 200, column=0, columnspan=2, sticky="w", pady=(0, PAD))
+                reset_lbl.grid(row=row + 100, column=0, columnspan=2, sticky="w", pady=(0, PAD))
 
                 self._bar_widgets.append({
                     "bar_lbl": bar_lbl,
-                    "count_lbl": count_lbl,
                     "reset_lbl": reset_lbl,
                 })
 
@@ -735,26 +764,39 @@ if __name__ == "__main__":
             self._poll_once()
 
         def update_bars(self, bars: list[QuotaBar], reset_date_utc: str, stale: bool = False):
-            if len(bars) != len(self._bar_widgets):
+            needs_anchor = len(bars) != len(self._bar_widgets)
+            if needs_anchor:
                 self._rebuild_frame(bars)
+
+            # Set images and text first so winfo_reqwidth includes image sizes
+            self._bar_images.clear()
+            for i, bar in enumerate(bars):
+                color = bar_color(bar.percent_used)
+                overlay = f"{bar.percent_used:.0f}%"
+                if stale:
+                    overlay += " ⚠"
+                img = render_pill_bar(BAR_W, BAR_H, bar.percent_used, color,
+                                      stale=stale, overlay_text=overlay)
+                self._bar_images.append(img)
+                w = self._bar_widgets[i]
+                w["bar_lbl"].configure(image=img)
+                self._show_tooltip(w["bar_lbl"], format_bar_count(bar))
+                reset_text = (
+                    f"reset {reset_date_utc[:10]} ({calc_reset_countdown(reset_date_utc)})"
+                    if reset_date_utc else "reset unknown"
+                )
+                w["reset_lbl"].configure(text=reset_text)
+
+            if needs_anchor:
+                # Measure after images are set so bar width is included
                 self.root.update_idletasks()
                 total_w = self._frame.winfo_reqwidth() + PAD * 2
                 total_h = self._frame.winfo_reqheight() + PAD * 2
                 anchor_to_taskbar(self.root, total_w, total_h)
-
-            self._bar_images.clear()
-            for i, bar in enumerate(bars):
-                color = bar_color(bar.percent_used)
-                img = render_pill_bar(BAR_W, BAR_H, bar.percent_used, color, stale=stale)
-                self._bar_images.append(img)
-                w = self._bar_widgets[i]
-                w["bar_lbl"].configure(image=img)
-                count_text = format_bar_count(bar)
-                if stale:
-                    count_text += " ⚠ stale"
-                w["count_lbl"].configure(text=count_text)
-                reset_text = f"reset {reset_date_utc[:10]} ({calc_reset_countdown(reset_date_utc)})" if reset_date_utc else "reset unknown"
-                w["reset_lbl"].configure(text=reset_text)
+                self.root.update_idletasks()
+                self.config.window_width = self.root.winfo_width()
+                self.config.window_height = self.root.winfo_height()
+                save_config(self.config)
 
         def pulse_dot(self):
             self._dot_alpha = max(40, min(255, self._dot_alpha + self._dot_direction * 15))
