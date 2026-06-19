@@ -347,4 +347,75 @@ def render_dot(size: int, alpha: int) -> object:
 
 # ── Guard — everything below this line only runs when launched directly ────────
 if __name__ == "__main__":
-    pass
+    import ctypes
+    import ctypes.wintypes as wintypes
+    import tkinter as tk
+    from PIL import Image, ImageDraw, ImageTk
+
+    # ── Win32 constants ────────────────────────────────────────────────────────
+    GWL_EXSTYLE = -20
+    WS_EX_NOACTIVATE = 0x08000000
+    WS_EX_TOOLWINDOW = 0x00000080
+    HWND_TOPMOST = -1
+    SWP_NOMOVE = 0x0002
+    SWP_NOSIZE = 0x0001
+    SWP_NOACTIVATE = 0x0010
+    DWMWA_WINDOW_CORNER_PREFERENCE = 33
+    DWMWCP_ROUND = 2
+    ABM_GETTASKBARPOS = 0x00000005
+
+    user32 = ctypes.windll.user32
+    dwmapi = ctypes.windll.dwmapi
+    shell32 = ctypes.windll.shell32
+
+    class _RECT(ctypes.Structure):
+        _fields_ = [
+            ("left", wintypes.LONG), ("top", wintypes.LONG),
+            ("right", wintypes.LONG), ("bottom", wintypes.LONG),
+        ]
+
+    class _APPBARDATA(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD),
+            ("hWnd", wintypes.HWND),
+            ("uCallbackMessage", wintypes.UINT),
+            ("uEdge", wintypes.UINT),
+            ("rc", _RECT),
+            ("lParam", ctypes.c_long),
+        ]
+
+    # ── Win32 functions ────────────────────────────────────────────────────────
+    def setup_window_flags(hwnd: int) -> None:
+        style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        style |= WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW
+        user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
+        user32.SetWindowPos(
+            hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        )
+        try:
+            pref = ctypes.c_int(DWMWCP_ROUND)
+            dwmapi.DwmSetWindowAttribute(
+                hwnd, DWMWA_WINDOW_CORNER_PREFERENCE,
+                ctypes.byref(pref), ctypes.sizeof(pref),
+            )
+        except Exception:
+            pass  # Win10: square corners
+
+    def get_taskbar_rect() -> tuple[int, int, int, int]:
+        data = _APPBARDATA()
+        data.cbSize = ctypes.sizeof(_APPBARDATA)
+        shell32.SHAppBarMessage(ABM_GETTASKBARPOS, ctypes.byref(data))
+        r = data.rc
+        return r.left, r.top, r.right - r.left, r.bottom - r.top
+
+    def anchor_to_taskbar(root: tk.Tk, widget_w: int, widget_h: int) -> tuple[int, int]:
+        _, _, _, th = get_taskbar_rect()
+        screen_h = root.winfo_screenheight()
+        # Place bottom-left above taskbar
+        x = 4
+        y = screen_h - th - widget_h - 4
+        root.geometry(f"{widget_w}x{widget_h}+{x}+{y}")
+        return x, y
+
+    # (UI and main loop added in Tasks 9-12)
