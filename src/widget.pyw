@@ -480,7 +480,7 @@ if __name__ == "__main__":
     BAR_W = 160
     BAR_H = 18
     PAD = 4
-    PAD_V = 3
+    PAD_V = 1
     DOT_SIZE = 8
     FONT = "Segoe UI"
     FONT_LABEL = (FONT, 9, "bold")
@@ -634,28 +634,31 @@ if __name__ == "__main__":
             # Essential: pure horizontal pack — no grid rows that inflate height
             for i, bar in enumerate(bars):
                 col = tk.Frame(self._frame, bg=BG)
-                col.pack(side="left", padx=(0, PAD if i < len(bars) - 1 else 0))
+                col.pack(side="left",
+                         padx=(0, PAD if i < len(bars) - 1 else 0),
+                         pady=0)
 
                 bar_lbl = tk.Label(col, bg=BG)
-                bar_lbl.pack(anchor="w")
+                bar_lbl.pack(anchor="w", pady=0)
 
-                reset_lbl = tk.Label(col, text="", bg=BG, fg="#888888", font=FONT_SMALL)
-                reset_lbl.pack(anchor="w")
+                reset_lbl = tk.Label(col, text="", bg=BG, fg="#888888",
+                                     font=FONT_SMALL, pady=0)
+                reset_lbl.pack(anchor="w", pady=0)
 
                 self._bar_widgets.append({"bar_lbl": bar_lbl, "reset_lbl": reset_lbl})
 
             # Dot + ≡ in compact right column
             ctrl = tk.Frame(self._frame, bg=BG)
-            ctrl.pack(side="left", padx=(PAD, 0))
+            ctrl.pack(side="left", padx=(PAD, 0), pady=0)
 
             menu_btn = tk.Label(ctrl, text="≡", bg="#2a2a2a", fg="#cccccc",
-                                font=FONT_LABEL, cursor="hand2", padx=3)
+                                font=FONT_LABEL, cursor="hand2", padx=3, pady=0)
             menu_btn._is_menu_btn = True
             menu_btn.bind("<Button-1>", lambda e: self._show_context_menu(e))
-            menu_btn.pack(anchor="n")
+            menu_btn.pack(anchor="n", pady=0)
 
-            self._dot_lbl = tk.Label(ctrl, bg=BG)
-            self._dot_lbl.pack(anchor="s")
+            self._dot_lbl = tk.Label(ctrl, bg=BG, pady=0)
+            self._dot_lbl.pack(anchor="s", pady=0)
 
             self._bind_widgets(self._frame)
 
