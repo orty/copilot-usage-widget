@@ -20,5 +20,6 @@ def W():
     """Load widget.pyw as a module (GUI mocked). All tests use this fixture."""
     spec = importlib.util.spec_from_file_location("widget", _WIDGET_PATH)
     mod = importlib.util.module_from_spec(spec)
+    sys.modules["widget"] = mod
     spec.loader.exec_module(mod)
     return mod
