@@ -63,6 +63,51 @@ def save_config(config: AppConfig) -> None:
     }, indent=2))
 
 
+# ── Authentication ─────────────────────────────────────────────────────────────
+def get_gh_token() -> Optional[str]:
+    """Run `gh auth token`, return token string or None on any failure."""
+    try:
+        result = subprocess.run(
+            ["gh", "auth", "token"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        token = result.stdout.strip()
+        return token if token else None
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+
+
+def ensure_authenticated(config: AppConfig) -> str:
+    """Return valid Bearer token. Updates config.oauth_token as side effect.
+
+    Strategy: cached token → gh auth token → gh auth login --web + retry.
+    Raises RuntimeError if all paths fail.
+    """
+    # Try cached token first
+    if config.oauth_token:
+        return config.oauth_token
+
+    # Try to get token from gh CLI
+    token = get_gh_token()
+    if token:
+        config.oauth_token = token
+        return token
+
+    # gh installed but not logged in — trigger device flow
+    subprocess.run(["gh", "auth", "login", "--web"], check=False)
+    token = get_gh_token()
+    if token:
+        config.oauth_token = token
+        return token
+
+    raise RuntimeError(
+        "Could not obtain GitHub token.\n"
+        "Install GitHub CLI (https://cli.github.com) and run: gh auth login"
+    )
+
+
 # ── Guard — everything below this line only runs when launched directly ────────
 if __name__ == "__main__":
     pass
