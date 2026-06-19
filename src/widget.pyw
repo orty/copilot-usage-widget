@@ -190,6 +190,64 @@ def parse_quotas(data: dict) -> list[QuotaBar]:
     return quotas
 
 
+# ── Display helpers ────────────────────────────────────────────────────────────
+def bar_color(percent_used: float) -> str:
+    """Return hex color string based on usage percentage.
+
+    Args:
+        percent_used: Percentage of quota used (0-100+).
+
+    Returns:
+        Hex color string: critical (#cf222e) if >= 90%, warning (#d4a017) if >= 75%, normal (#0969da) otherwise.
+    """
+    if percent_used >= 90.0:
+        return COLOR_CRITICAL
+    if percent_used >= 75.0:
+        return COLOR_WARNING
+    return COLOR_NORMAL
+
+
+def calc_reset_countdown(reset_date_utc: str) -> str:
+    """Calculate human-readable countdown to reset date.
+
+    Handles ISO 8601 format with Z suffix (from API).
+
+    Args:
+        reset_date_utc: ISO 8601 datetime string (e.g. "2099-01-01T00:00:00.000Z").
+
+    Returns:
+        Countdown string: "reset now" if past, "11d 12h" if > 1 day, "3h 45m" if > 1 hour, "23m" otherwise.
+    """
+    reset = datetime.fromisoformat(reset_date_utc.replace("Z", "+00:00"))
+    delta = reset - datetime.now(timezone.utc)
+    if delta.total_seconds() <= 0:
+        return "reset now"
+    total_minutes = int(delta.total_seconds() // 60)
+    days = total_minutes // (60 * 24)
+    hours = (total_minutes % (60 * 24)) // 60
+    minutes = total_minutes % 60
+    if days > 0:
+        return f"{days}d {hours}h"
+    if hours > 0:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
+
+
+def format_bar_count(bar: QuotaBar) -> str:
+    """Format remaining count with optional overage suffix.
+
+    Args:
+        bar: QuotaBar object with remaining and overage_count.
+
+    Returns:
+        String like "90 remaining" or "0 remaining (+3 overage)" if overage.
+    """
+    base = f"{bar.remaining} remaining"
+    if bar.overage_count > 0:
+        return f"{base} (+{bar.overage_count} overage)"
+    return base
+
+
 # ── Guard — everything below this line only runs when launched directly ────────
 if __name__ == "__main__":
     pass
