@@ -24,6 +24,18 @@ COLOR_CRITICAL = "#cf222e"
 LABEL_MAP = {"premium_interactions": "Premium"}
 
 
+# ── QuotaBar dataclass ─────────────────────────────────────────────────────────
+@dataclass
+class QuotaBar:
+    id: str
+    label: str
+    entitlement: int
+    remaining: int
+    percent_used: float
+    overage_count: int
+    overage_permitted: bool
+
+
 # ── AppConfig dataclass ────────────────────────────────────────────────────────
 @dataclass
 class AppConfig:
@@ -106,6 +118,76 @@ def ensure_authenticated(config: AppConfig) -> str:
         "Could not obtain GitHub token.\n"
         "Install GitHub CLI (https://cli.github.com) and run: gh auth login"
     )
+
+
+# ── API client ─────────────────────────────────────────────────────────────────
+def humanize_label(quota_id: str) -> str:
+    """Convert quota_id to human-readable label.
+
+    Uses LABEL_MAP if available, otherwise converts quota_id to title case.
+    """
+    if quota_id in LABEL_MAP:
+        return LABEL_MAP[quota_id]
+    return quota_id.replace("_", " ").title()
+
+
+def fetch_user_data(token: str) -> dict:
+    """Fetch user quota data from GitHub API.
+
+    Args:
+        token: GitHub personal access token.
+
+    Returns:
+        Parsed JSON response containing quota_snapshots.
+
+    Raises:
+        RuntimeError: If curl request fails.
+    """
+    result = subprocess.run(
+        ["curl", "-s", "--fail",
+         "-H", f"Authorization: Bearer {token}",
+         "-H", "Accept: application/json",
+         API_URL],
+        capture_output=True,
+        timeout=15,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(f"curl failed (exit {result.returncode}): {result.stderr.decode()}")
+
+    return json.loads(result.stdout)
+
+
+def parse_quotas(data: dict) -> list[QuotaBar]:
+    """Parse quota_snapshots from API response into QuotaBar objects.
+
+    Skips any snapshots where unlimited == True.
+
+    Args:
+        data: Response dict from fetch_user_data.
+
+    Returns:
+        List of QuotaBar objects for all limited quotas.
+    """
+    quotas = []
+    for quota_id, snap in data.get("quota_snapshots", {}).items():
+        if snap.get("unlimited", False):
+            continue
+
+        percent_used = 100.0 - snap.get("percent_remaining", 100.0)
+
+        quota = QuotaBar(
+            id=quota_id,
+            label=humanize_label(quota_id),
+            entitlement=snap.get("entitlement", 0),
+            remaining=snap.get("remaining", 0),
+            percent_used=percent_used,
+            overage_count=snap.get("overage_count", 0),
+            overage_permitted=snap.get("overage_permitted", False),
+        )
+        quotas.append(quota)
+
+    return quotas
 
 
 # ── Guard — everything below this line only runs when launched directly ────────
