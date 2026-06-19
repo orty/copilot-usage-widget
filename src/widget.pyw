@@ -418,4 +418,111 @@ if __name__ == "__main__":
         root.geometry(f"{widget_w}x{widget_h}+{x}+{y}")
         return x, y
 
+    # ── Widget UI ──────────────────────────────────────────────────────────────
+    BAR_W = 160
+    BAR_H = 18
+    PAD = 6
+    DOT_SIZE = 8
+    FONT_LABEL = ("Segoe UI", 9, "bold")
+    FONT_SMALL = ("Segoe UI", 8)
+    BG = "#1e1e1e"
+    FG = "#cccccc"
+
+    class WidgetApp:
+        def __init__(self, config: AppConfig):
+            self.config = config
+            self.root = tk.Tk()
+            self.root.overrideredirect(True)
+            self.root.configure(bg=BG)
+            self.root.attributes("-topmost", True)
+            self.root.attributes("-alpha", 0.95)
+
+            self._bar_images: list = []  # keep refs so GC doesn't collect PhotoImages
+            self._dot_image = None
+            self._dot_alpha = 255
+            self._dot_direction = -1
+
+            self._frame = tk.Frame(self.root, bg=BG)
+            self._frame.pack(padx=PAD, pady=PAD)
+            self._bar_widgets: list[dict] = []
+
+            self.root.after(100, self._post_init_win32)
+
+        def _post_init_win32(self):
+            hwnd = int(self.root.wm_frame(), 16)
+            setup_window_flags(hwnd)
+            self._hwnd = hwnd
+            # Position will be set on first update_bars call
+
+        def _rebuild_essential_frame(self, bars: list[QuotaBar]):
+            for w in self._frame.winfo_children():
+                w.destroy()
+            self._bar_widgets.clear()
+            self._bar_images.clear()
+
+            # Essential mode: bars side by side in a single row
+            for i, bar in enumerate(bars):
+                col_frame = tk.Frame(self._frame, bg=BG)
+                col_frame.grid(row=0, column=i, padx=(0, PAD if i < len(bars) - 1 else 0))
+
+                lbl = tk.Label(col_frame, text=bar.label, bg=BG, fg=FG, font=FONT_LABEL)
+                lbl.pack(anchor="w")
+
+                bar_lbl = tk.Label(col_frame, bg=BG)
+                bar_lbl.pack(anchor="w")
+
+                count_lbl = tk.Label(col_frame, text="", bg=BG, fg=FG, font=FONT_SMALL)
+                count_lbl.pack(anchor="w")
+
+                reset_lbl = tk.Label(col_frame, text="", bg=BG, fg="#888888", font=FONT_SMALL)
+                reset_lbl.pack(anchor="w")
+
+                self._bar_widgets.append({
+                    "bar_lbl": bar_lbl,
+                    "count_lbl": count_lbl,
+                    "reset_lbl": reset_lbl,
+                })
+
+            # Dot indicator (refresh pulse)
+            self._dot_lbl = tk.Label(self._frame, bg=BG)
+            self._dot_lbl.grid(row=0, column=len(bars), padx=(PAD, 0), sticky="s")
+
+        def _rebuild_frame(self, bars: list[QuotaBar]):
+            # Task 10 will add standard mode dispatch here
+            self._rebuild_essential_frame(bars)
+
+        def update_bars(self, bars: list[QuotaBar], reset_date_utc: str, stale: bool = False):
+            if len(bars) != len(self._bar_widgets):
+                self._rebuild_frame(bars)
+                self.root.update_idletasks()
+                total_w = self._frame.winfo_reqwidth() + PAD * 2
+                total_h = self._frame.winfo_reqheight() + PAD * 2
+                anchor_to_taskbar(self.root, total_w, total_h)
+
+            self._bar_images.clear()
+            for i, bar in enumerate(bars):
+                color = bar_color(bar.percent_used)
+                img = render_pill_bar(BAR_W, BAR_H, bar.percent_used, color, stale=stale)
+                self._bar_images.append(img)
+                w = self._bar_widgets[i]
+                w["bar_lbl"].configure(image=img)
+                count_text = format_bar_count(bar)
+                if stale:
+                    count_text += " ⚠ stale"
+                w["count_lbl"].configure(text=count_text)
+                w["reset_lbl"].configure(text=f"reset {reset_date_utc[:10]} ({calc_reset_countdown(reset_date_utc)})")
+
+        def pulse_dot(self):
+            self._dot_alpha = max(40, min(255, self._dot_alpha + self._dot_direction * 15))
+            if self._dot_alpha <= 40 or self._dot_alpha >= 255:
+                self._dot_direction *= -1
+            self._dot_image = render_dot(DOT_SIZE, self._dot_alpha)
+            if hasattr(self, "_dot_lbl"):
+                self._dot_lbl.configure(image=self._dot_image)
+            self.root.after(80, self.pulse_dot)
+
+        def run(self):
+            self.pulse_dot()
+            self.root.mainloop()
+
     # (UI and main loop added in Tasks 9-12)
