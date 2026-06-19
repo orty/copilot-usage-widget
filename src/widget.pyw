@@ -46,6 +46,8 @@ class AppConfig:
     window_y: int = -1
     display_mode: str = "essential"
     notified: dict = field(default_factory=dict)
+    countdown_display: str = "dot"   # "dot" | "numeric"
+    show_in_taskbar: bool = False
 
 
 # ── Config I/O ─────────────────────────────────────────────────────────────────
@@ -59,6 +61,8 @@ def load_config() -> AppConfig:
             window_y=raw.get("window_y", -1),
             display_mode=raw.get("display_mode", "essential"),
             notified=raw.get("notified", {}),
+            countdown_display=raw.get("countdown_display", "dot"),
+            show_in_taskbar=raw.get("show_in_taskbar", False),
         )
     except (FileNotFoundError, json.JSONDecodeError):
         return AppConfig()
@@ -73,6 +77,8 @@ def save_config(config: AppConfig) -> None:
         "window_y": config.window_y,
         "display_mode": config.display_mode,
         "notified": config.notified,
+        "countdown_display": config.countdown_display,
+        "show_in_taskbar": config.show_in_taskbar,
     }, indent=2))
 
 
@@ -447,8 +453,11 @@ if __name__ == "__main__":
     BAR_H = 18
     PAD = 6
     DOT_SIZE = 8
-    FONT_LABEL = ("Segoe UI", 9, "bold")
-    FONT_SMALL = ("Segoe UI", 8)
+    FONT = "Segoe UI"
+    FONT_LABEL = (FONT, 9, "bold")
+    FONT_SMALL = (FONT, 8)
+    FONT_TITLE = (FONT, 10, "bold")
+    FONT_MENU = (FONT, 11)
     BG = "#1e1e1e"
     FG = "#cccccc"
 
@@ -476,13 +485,16 @@ if __name__ == "__main__":
 
             self.root.after(100, self._post_init_win32)
 
-        def _bind_widgets(self, widget: tk.Widget) -> None:
+        def _bind_widgets(self, widget: tk.Widget, skip_drag: bool = False) -> None:
             """Recursively bind right-click and drag to widget and all children."""
             widget.bind("<Button-3>", self._show_context_menu)
-            widget.bind("<ButtonPress-1>", self._start_drag)
-            widget.bind("<B1-Motion>", self._do_drag)
+            if not skip_drag:
+                widget.bind("<ButtonPress-1>", self._start_drag)
+                widget.bind("<B1-Motion>", self._do_drag)
+                widget.bind("<ButtonRelease-1>", self._end_drag)
             for child in widget.winfo_children():
-                self._bind_widgets(child)
+                # Menu button skips drag so clicks open menu, not drag
+                self._bind_widgets(child, skip_drag=getattr(child, "_is_menu_btn", False))
 
         def _start_drag(self, event: tk.Event) -> None:
             self._drag_x = event.x_root - self.root.winfo_x()
@@ -492,6 +504,11 @@ if __name__ == "__main__":
             x = event.x_root - self._drag_x
             y = event.y_root - self._drag_y
             self.root.geometry(f"+{x}+{y}")
+
+        def _end_drag(self, event: tk.Event) -> None:
+            self.config.window_x = self.root.winfo_x()
+            self.config.window_y = self.root.winfo_y()
+            save_config(self.config)
 
         def _post_init_win32(self):
             hwnd = int(self.root.wm_frame(), 16)
@@ -590,6 +607,13 @@ if __name__ == "__main__":
             # Dot indicator (refresh pulse)
             self._dot_lbl = tk.Label(self._frame, bg=BG, width=DOT_SIZE, height=DOT_SIZE)
             self._dot_lbl.grid(row=0, column=len(bars), padx=(PAD, 0), sticky="s")
+
+            # Hamburger menu button
+            menu_btn = tk.Label(self._frame, text="≡", bg=BG, fg="#666666",
+                                font=FONT_MENU, cursor="hand2")
+            menu_btn._is_menu_btn = True  # skip drag binding
+            menu_btn.bind("<Button-1>", lambda e: self._show_context_menu(e))
+            menu_btn.grid(row=0, column=len(bars) + 1, padx=(2, 0), sticky="s")
             self._bind_widgets(self._frame)
 
         def _rebuild_standard_frame(self, bars: list[QuotaBar]):
@@ -601,9 +625,15 @@ if __name__ == "__main__":
             # Standard mode: title bar row, then bars stacked vertically
             title_lbl = tk.Label(
                 self._frame, text="Copilot Usage", bg=BG, fg=FG,
-                font=("Segoe UI", 10, "bold"),
+                font=FONT_TITLE,
             )
-            title_lbl.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, PAD))
+            title_lbl.grid(row=0, column=0, sticky="w", pady=(0, PAD))
+
+            menu_btn = tk.Label(self._frame, text="≡", bg=BG, fg="#666666",
+                                font=FONT_MENU, cursor="hand2")
+            menu_btn._is_menu_btn = True
+            menu_btn.bind("<Button-1>", lambda e: self._show_context_menu(e))
+            menu_btn.grid(row=0, column=1, sticky="e", pady=(0, PAD))
 
             for i, bar in enumerate(bars):
                 row = i + 1
@@ -743,5 +773,7 @@ if __name__ == "__main__":
     ctypes.windll.ole32.CoInitialize(None)
     _config = load_config()
     _app = WidgetApp(_config)
+    if _config.window_x >= 0 and _config.window_y >= 0:
+        _app.root.geometry(f"+{_config.window_x}+{_config.window_y}")
     _app.root.after(500, _app._poll_once)
     _app.run()
