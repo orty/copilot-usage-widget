@@ -1,6 +1,7 @@
 # Copilot Usage Widget — Design Spec
-**Date:** 2026-06-19  
-**Reference:** https://github.com/niccolo-sabato/claude-usage-widget  
+
+**Date:** 2026-06-19
+**Reference:** [niccolo-sabato/claude-usage-widget](https://github.com/niccolo-sabato/claude-usage-widget)
 **Status:** Approved
 
 ---
@@ -15,7 +16,7 @@ Windows 11 taskbar widget that monitors GitHub Copilot Enterprise premium intera
 
 Single-file application (`src/widget.pyw`) with minimal supporting assets. No modular split — scope does not warrant it.
 
-```
+```text
 copilot-usage-widget/
 ├── src/
 │   └── widget.pyw          # entire application
@@ -29,14 +30,16 @@ copilot-usage-widget/
 ```
 
 **Stack:**
+
 - Python 3.11+
 - tkinter (window/event loop)
 - Pillow (anti-aliased pill bar rendering, 4× supersample)
 - ctypes (Win32 API calls)
 - `curl` bundled (avoids TLS fingerprint issues on GitHub endpoints)
 
-**Runtime config:** `%LOCALAPPDATA%\Copilot Usage\config.json`  
-Stores: OAuth token, refresh interval, window position, display mode.
+**Runtime config:** `%LOCALAPPDATA%\Copilot Usage\config.json`
+
+Keys: `oauth_token`, `refresh_interval`, `window_x`, `window_y`, `display_mode`.
 
 **Packaging:** PyInstaller → single exe → Inno Setup installer (~15–20 MB).
 
@@ -46,17 +49,17 @@ Stores: OAuth token, refresh interval, window position, display mode.
 
 ### Endpoint
 
-```
+```text
 GET https://api.github.com/copilot_internal/user
 Authorization: Bearer <token>
 ```
 
-This is the internal endpoint used by the GitHub Copilot VS Code extension. Confirmed via DevTools network capture.
+Internal endpoint used by the GitHub Copilot VS Code extension. Confirmed via DevTools network capture.
 
 ### Auth Flow
 
 1. Try `gh auth token` → use output as Bearer token
-2. If `gh` not found or token returns 401 → GitHub OAuth device flow (opens browser, stores token in config)
+2. If `gh` not found or token returns 401 → GitHub OAuth device flow (opens browser, stores token in config under `oauth_token`)
 3. On subsequent 401 → re-trigger device flow
 
 ### Response Schema (relevant fields)
@@ -74,8 +77,8 @@ This is the internal endpoint used by the GitHub Copilot VS Code extension. Conf
       "overage_count": 0,
       "overage_permitted": true
     },
-    "chat": { "unlimited": true, ... },
-    "completions": { "unlimited": true, ... }
+    "chat": { "unlimited": true },
+    "completions": { "unlimited": true }
   }
 }
 ```
@@ -86,10 +89,10 @@ Iterate `quota_snapshots`. Show a bar for each entry where `unlimited == false`.
 
 ### Derived Values
 
-```
-used        = entitlement - remaining
+```text
+used         = entitlement - remaining
 percent_used = 100 - percent_remaining
-reset_in    = quota_reset_date_utc - now()
+reset_in     = quota_reset_date_utc - now()
 ```
 
 ### Polling
@@ -106,16 +109,18 @@ reset_in    = quota_reset_date_utc - now()
 ### Bar Anatomy
 
 Each bar displays:
-- **Label:** quota ID humanized (`premium_interactions` → `"Premium"`)
+
+- **Label:** quota ID mapped via hardcoded dict (`premium_interactions` → `"Premium"`); unknown IDs fall back to title-case with underscores replaced by spaces
 - **Pill progress bar:** filled proportional to `percent_used`, Pillow-rendered at 4× supersample
 - **Count:** `"{remaining} remaining"` (e.g., `"90 remaining"`)
 - **Reset countdown:** `"reset 2026-07-01 (11d 12h)"`
 - **Overage badge:** shown only when `overage_count > 0` (e.g., `"+3 overage"`)
+- **Stale indicator:** when last poll failed, bar grays out and shows `"⚠ stale"` suffix
 
 ### Color Thresholds (by percent_used)
 
 | Range | Color | Meaning |
-|---|---|---|
+| --- | --- | --- |
 | < 75% used | GitHub blue (`#0969da`) | Normal |
 | 75–89% used | Yellow (`#d4a017`) | Warning |
 | ≥ 90% used | Red (`#cf222e`) | Critical |
@@ -123,12 +128,14 @@ Each bar displays:
 ### Display Modes
 
 **Essential mode** (primary):
+
 - No title bar
 - Compact single row, bars side by side
 - Bottom edge anchored to taskbar
 - Extra bars expand upward
 
-**Standard mode**:
+**Standard mode:**
+
 - Full title bar (`"Copilot Usage"`)
 - Bars stacked vertically with labels
 - Section dividers between bars
@@ -139,14 +146,14 @@ Pulsing dot (identical to reference). Cycles through opacity states between poll
 
 ### Toast Notifications
 
-Fired at 75%, 90%, 95%, 100% `percent_used` for the `premium_interactions` quota. One notification per threshold per billing period (suppressed until next reset).
+Fired at 75%, 90%, 95%, 100% `percent_used` for each quota bar. One notification per threshold per billing period (suppressed until next reset).
 
 ---
 
 ## Win32 Integration (exact clone of reference)
 
 | Feature | Implementation |
-|---|---|
+| --- | --- |
 | No focus steal | `WS_EX_NOACTIVATE` extended style |
 | Hidden from Alt+Tab / Win+Tab | `SetWindowLong` flags |
 | Always on top | `HWND_TOPMOST`, re-asserted on focus events |
@@ -159,18 +166,19 @@ Fired at 75%, 90%, 95%, 100% `percent_used` for the `premium_interactions` quota
 ## Error Handling
 
 | Condition | Behavior |
-|---|---|
+| --- | --- |
 | `gh` not found | Fall through to device flow immediately |
 | 401 Unauthorized | Re-trigger OAuth device flow |
 | Network timeout | Show last known data with stale indicator; retry next poll |
-| Endpoint returns no quotas | Show "No quotas" placeholder; retry |
+| Endpoint returns no quotas | Show `"No quotas"` placeholder; retry |
 | `quota_snapshots` missing | Treat as empty; show connection error state |
 
 ---
 
 ## Testing
 
-No automated test suite for the widget itself (UI-heavy, single file). Manual verification checklist:
+No automated test suite (UI-heavy, single file). Manual verification checklist:
+
 - [ ] `gh auth token` path: token extracted, endpoint called, bar rendered
 - [ ] Device flow path: browser opens, token stored, widget loads
 - [ ] Essential mode: renders correctly at 100%, 125%, 150%, 200% DPI
@@ -178,6 +186,7 @@ No automated test suite for the widget itself (UI-heavy, single file). Manual ve
 - [ ] Color thresholds: inject mock data at 74%, 75%, 89%, 90%, 100% used
 - [ ] Reset countdown: verify countdown decrements correctly
 - [ ] Overage badge: appears when `overage_count > 0`
+- [ ] Stale indicator: appears when network call fails
 - [ ] Toast: fires at correct thresholds, suppressed on second poll at same threshold
 - [ ] Win32: no focus steal, hidden from Alt+Tab, topmost, rounded corners on Win11
 
