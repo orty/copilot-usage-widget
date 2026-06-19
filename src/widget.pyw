@@ -471,9 +471,27 @@ if __name__ == "__main__":
             self._frame = tk.Frame(self.root, bg=BG)
             self._frame.pack(padx=PAD, pady=PAD)
             self._bar_widgets: list[dict] = []
+            self._drag_x = 0
+            self._drag_y = 0
 
-            self._frame.bind("<Button-3>", self._show_context_menu)
             self.root.after(100, self._post_init_win32)
+
+        def _bind_widgets(self, widget: tk.Widget) -> None:
+            """Recursively bind right-click and drag to widget and all children."""
+            widget.bind("<Button-3>", self._show_context_menu)
+            widget.bind("<ButtonPress-1>", self._start_drag)
+            widget.bind("<B1-Motion>", self._do_drag)
+            for child in widget.winfo_children():
+                self._bind_widgets(child)
+
+        def _start_drag(self, event: tk.Event) -> None:
+            self._drag_x = event.x_root - self.root.winfo_x()
+            self._drag_y = event.y_root - self.root.winfo_y()
+
+        def _do_drag(self, event: tk.Event) -> None:
+            x = event.x_root - self._drag_x
+            y = event.y_root - self._drag_y
+            self.root.geometry(f"+{x}+{y}")
 
         def _post_init_win32(self):
             hwnd = int(self.root.wm_frame(), 16)
@@ -570,8 +588,9 @@ if __name__ == "__main__":
                 })
 
             # Dot indicator (refresh pulse)
-            self._dot_lbl = tk.Label(self._frame, bg=BG)
+            self._dot_lbl = tk.Label(self._frame, bg=BG, width=DOT_SIZE, height=DOT_SIZE)
             self._dot_lbl.grid(row=0, column=len(bars), padx=(PAD, 0), sticky="s")
+            self._bind_widgets(self._frame)
 
         def _rebuild_standard_frame(self, bars: list[QuotaBar]):
             for w in self._frame.winfo_children():
@@ -609,8 +628,9 @@ if __name__ == "__main__":
             sep = tk.Frame(self._frame, bg="#444444", height=1)
             sep.grid(row=99, column=0, columnspan=2, sticky="ew", pady=PAD)
 
-            self._dot_lbl = tk.Label(self._frame, bg=BG)
+            self._dot_lbl = tk.Label(self._frame, bg=BG, width=DOT_SIZE, height=DOT_SIZE)
             self._dot_lbl.grid(row=99, column=1, sticky="e")
+            self._bind_widgets(self._frame)
 
         def _rebuild_frame(self, bars: list[QuotaBar]):
             if self.config.display_mode == "standard":
