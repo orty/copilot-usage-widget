@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt pyinstaller
+
+      - name: Run tests
+        run: pytest --tb=short -q
+
+      - name: Extract version from tag
+        run: |
+          $ver = "${{ github.ref_name }}" -replace '^v', ''
+          echo "VERSION=$ver" >> $env:GITHUB_ENV
+        shell: pwsh
+
+      - name: Patch APP_VERSION in source
+        run: |
+          (Get-Content src\widget.pyw) -replace "^APP_VERSION = .*", "APP_VERSION = '$env:VERSION'" |
+            Set-Content src\widget.pyw
+        shell: pwsh
+
+      - name: Build with PyInstaller (onedir)
+        run: |
+          pyinstaller --noconfirm --clean --windowed `
+            --name "CopilotUsage" `
+            --icon "assets\icon.ico" `
+            --exclude-module numpy `
+            --distpath "build\dist" `
+            --workpath "build\pyi-work" `
+            --specpath "build" `
+            "src\widget.pyw"
+        shell: pwsh
+
+      - name: Install Inno Setup
+        run: choco install innosetup --yes --no-progress
+        shell: pwsh
+
+      - name: Patch version in setup.iss and build installer
+        run: |
+          (Get-Content installer\setup.iss) -replace '#define MyAppVersion ".*"', "#define MyAppVersion `"$env:VERSION`"" |
+            Set-Content installer\setup.iss
+          & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' installer\setup.iss
+        shell: pwsh
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          files: |
+            releases/CopilotUsage-Setup.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

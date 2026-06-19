@@ -4,9 +4,13 @@ from __future__ import annotations
 import ctypes
 import json
 import os
+import ssl
 import subprocess
 import sys
+import threading
 import time
+import urllib.error
+import urllib.request
 import webbrowser
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -18,6 +22,11 @@ APP_NAME = "Copilot Usage"
 APP_VERSION = "1.0.0"
 GITHUB_REPO_URL = "https://github.com/SergeARADJ/copilot-usage-widget"
 COPILOT_URL = "https://github.com/features/copilot"
+UPDATE_API_URL = "https://api.github.com/repos/SergeARADJ/copilot-usage-widget/releases/latest"
+UPDATE_RELEASES_URL = f"{GITHUB_REPO_URL}/releases"
+UPDATE_ASSET_NAME = "CopilotUsage-Setup.exe"
+UPDATE_CHECK_INTERVAL_S = 24 * 3600   # throttle: re-check at most once per day
+UPDATE_STARTUP_DELAY_MS = 12_000      # wait 12s after launch before first check
 CONFIG_PATH = Path(os.environ.get("LOCALAPPDATA", ".")) / APP_NAME / "config.json"
 API_URL = "https://api.github.com/copilot_internal/user"
 POLL_DEFAULT = 180
@@ -56,6 +65,7 @@ class AppConfig:
     notifications_enabled: bool = True
     window_width: int = -1
     window_height: int = -1
+    last_update_check: int = 0
 
 
 # ── Config I/O ─────────────────────────────────────────────────────────────────
@@ -383,6 +393,51 @@ def render_dot(size: int, alpha: int) -> object:
     return ImageTk.PhotoImage(img)
 
 
+# ── Auto-update helpers ────────────────────────────────────────────────────────
+
+def _version_tuple(v: str):
+    try:
+        return tuple(int(x) for x in str(v).strip().lstrip("vV").split("."))
+    except ValueError:
+        return (0,)
+
+
+def is_newer_version(latest: str, current: str = APP_VERSION) -> bool:
+    return _version_tuple(latest) > _version_tuple(current)
+
+
+def check_latest_release() -> Optional[dict]:
+    """Query GitHub Releases API. Returns dict or None on failure/draft/pre-release."""
+    try:
+        req = urllib.request.Request(
+            UPDATE_API_URL,
+            headers={
+                "User-Agent": f"CopilotUsageWidget/{APP_VERSION}",
+                "Accept": "application/vnd.github+json",
+            },
+        )
+        ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, json.JSONDecodeError, OSError):
+        return None
+    if data.get("draft") or data.get("prerelease"):
+        return None
+    tag = data.get("tag_name") or ""
+    asset_url = None
+    for a in data.get("assets") or []:
+        if a.get("name") == UPDATE_ASSET_NAME:
+            asset_url = a.get("browser_download_url")
+            break
+    return {
+        "version": tag.lstrip("vV"),
+        "tag": tag,
+        "asset_url": asset_url,
+        "html_url": data.get("html_url") or UPDATE_RELEASES_URL,
+    }
+
+
 # ── Guard — everything below this line only runs when launched directly ────────
 if __name__ == "__main__":
     import ctypes
@@ -505,6 +560,7 @@ if __name__ == "__main__":
             self._dot_direction = -1
             self._last_bars: list = []
             self._last_reset: str = ""
+            self._available_update: Optional[dict] = None  # set by background update check
 
             self._frame = tk.Frame(self.root, bg=BG)
             self._frame.pack(padx=PAD, pady=PAD_V)
@@ -759,6 +815,18 @@ if __name__ == "__main__":
                           command=lambda: os.startfile(str(CONFIG_PATH)))
             m.add_separator()
 
+            # Updates
+            if self._available_update:
+                ver = self._available_update["version"]
+                m.add_command(
+                    label=f"⬆  Update available (v{ver})",
+                    command=self._open_release,
+                    foreground="#4CAF50",
+                )
+            else:
+                m.add_command(label="⬆  Check for updates...", command=self._menu_check_updates)
+            m.add_separator()
+
             m.add_command(label="✕  Quit", command=self.root.destroy)
             m.add_separator()
             m.add_command(label=f"v{APP_VERSION}", state="disabled")
@@ -798,6 +866,50 @@ if __name__ == "__main__":
 
         def _trigger_refresh(self):
             self._poll_once()
+
+        # ── Auto-update ──────────────────────────────────────────────────────
+
+        def _schedule_update_check(self):
+            now = int(time.time())
+            last = self.config.last_update_check
+            if now - last < UPDATE_CHECK_INTERVAL_S:
+                return
+            self.root.after(UPDATE_STARTUP_DELAY_MS, self._auto_check_update)
+
+        def _auto_check_update(self):
+            self.config.last_update_check = int(time.time())
+            save_config(self.config)
+            threading.Thread(target=self._do_check_update, daemon=True).start()
+
+        def _do_check_update(self):
+            info = check_latest_release()
+            if info and is_newer_version(info["version"]):
+                self._available_update = info
+
+        def _menu_check_updates(self):
+            """Manual menu trigger — always runs, shows result via messagebox."""
+            def _worker():
+                info = check_latest_release()
+                if info is None:
+                    msg = "Could not reach GitHub. Check your connection."
+                    self.root.after(0, lambda m=msg: tk.messagebox.showwarning(APP_NAME, m))
+                elif is_newer_version(info["version"]):
+                    self._available_update = info
+                    msg = f"v{info['version']} is available.\nOpen Releases page to download?"
+                    self.root.after(0, lambda m=msg, i=info: (
+                        tk.messagebox.askyesno(APP_NAME, m) and
+                        webbrowser.open(i.get("html_url", UPDATE_RELEASES_URL))
+                    ))
+                else:
+                    msg = f"You're up to date (v{APP_VERSION})."
+                    self.root.after(0, lambda m=msg: tk.messagebox.showinfo(APP_NAME, m))
+            threading.Thread(target=_worker, daemon=True).start()
+
+        def _open_release(self):
+            if self._available_update:
+                webbrowser.open(self._available_update.get("html_url", UPDATE_RELEASES_URL))
+            else:
+                webbrowser.open(UPDATE_RELEASES_URL)
 
         def _poll_once(self):
             stale = False
@@ -906,4 +1018,5 @@ if __name__ == "__main__":
     if _config.window_x >= 0 and _config.window_y >= 0:
         _app.root.geometry(f"+{_config.window_x}+{_config.window_y}")
     _app.root.after(500, _app._poll_once)
+    _app._schedule_update_check()
     _app.run()
