@@ -446,6 +446,7 @@ if __name__ == "__main__":
             self._frame.pack(padx=PAD, pady=PAD)
             self._bar_widgets: list[dict] = []
 
+            self._frame.bind("<Button-3>", self._show_context_menu)
             self.root.after(100, self._post_init_win32)
 
         def _post_init_win32(self):
@@ -487,9 +488,70 @@ if __name__ == "__main__":
             self._dot_lbl = tk.Label(self._frame, bg=BG)
             self._dot_lbl.grid(row=0, column=len(bars), padx=(PAD, 0), sticky="s")
 
+        def _rebuild_standard_frame(self, bars: list[QuotaBar]):
+            for w in self._frame.winfo_children():
+                w.destroy()
+            self._bar_widgets.clear()
+            self._bar_images.clear()
+
+            # Standard mode: title bar row, then bars stacked vertically
+            title_lbl = tk.Label(
+                self._frame, text="Copilot Usage", bg=BG, fg=FG,
+                font=("Segoe UI", 10, "bold"),
+            )
+            title_lbl.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, PAD))
+
+            for i, bar in enumerate(bars):
+                row = i + 1
+                lbl = tk.Label(self._frame, text=bar.label, bg=BG, fg=FG, font=FONT_LABEL, width=10, anchor="w")
+                lbl.grid(row=row, column=0, sticky="w", pady=2)
+
+                bar_lbl = tk.Label(self._frame, bg=BG)
+                bar_lbl.grid(row=row, column=1, sticky="w", padx=(PAD, 0))
+
+                count_lbl = tk.Label(self._frame, text="", bg=BG, fg=FG, font=FONT_SMALL)
+                count_lbl.grid(row=row + 100, column=0, columnspan=2, sticky="w")
+
+                reset_lbl = tk.Label(self._frame, text="", bg=BG, fg="#888888", font=FONT_SMALL)
+                reset_lbl.grid(row=row + 200, column=0, columnspan=2, sticky="w", pady=(0, PAD))
+
+                self._bar_widgets.append({
+                    "bar_lbl": bar_lbl,
+                    "count_lbl": count_lbl,
+                    "reset_lbl": reset_lbl,
+                })
+
+            sep = tk.Frame(self._frame, bg="#444444", height=1)
+            sep.grid(row=99, column=0, columnspan=2, sticky="ew", pady=PAD)
+
+            self._dot_lbl = tk.Label(self._frame, bg=BG)
+            self._dot_lbl.grid(row=99, column=1, sticky="e")
+
         def _rebuild_frame(self, bars: list[QuotaBar]):
-            # Task 10 will add standard mode dispatch here
-            self._rebuild_essential_frame(bars)
+            if self.config.display_mode == "standard":
+                self._rebuild_standard_frame(bars)
+            else:
+                self._rebuild_essential_frame(bars)
+
+        def set_mode(self, mode: str):
+            self.config.display_mode = mode
+            save_config(self.config)
+            # Force rebuild on next update_bars call
+            self._bar_widgets.clear()
+
+        def _show_context_menu(self, event):
+            menu = tk.Menu(self.root, tearoff=0, bg="#2d2d2d", fg=FG, activebackground="#444444")
+            mode = self.config.display_mode
+            other = "standard" if mode == "essential" else "essential"
+            menu.add_command(label=f"Switch to {other} mode", command=lambda: self.set_mode(other))
+            menu.add_separator()
+            menu.add_command(label="Refresh now", command=self._trigger_refresh)
+            menu.add_separator()
+            menu.add_command(label="Quit", command=self.root.destroy)
+            menu.tk_popup(event.x_root, event.y_root)
+
+        def _trigger_refresh(self):
+            pass  # Task 12 will fill this in
 
         def update_bars(self, bars: list[QuotaBar], reset_date_utc: str, stale: bool = False):
             if len(bars) != len(self._bar_widgets):
