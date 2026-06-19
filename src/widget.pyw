@@ -7,13 +7,18 @@ import os
 import subprocess
 import sys
 import time
+import webbrowser
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-CONFIG_PATH = Path(os.environ.get("LOCALAPPDATA", ".")) / "Copilot Usage" / "config.json"
+APP_NAME = "Copilot Usage"
+APP_VERSION = "1.0.0"
+GITHUB_REPO_URL = "https://github.com/SergeARADJ/copilot-usage-widget"
+COPILOT_URL = "https://github.com/features/copilot"
+CONFIG_PATH = Path(os.environ.get("LOCALAPPDATA", ".")) / APP_NAME / "config.json"
 API_URL = "https://api.github.com/copilot_internal/user"
 POLL_DEFAULT = 180
 POLL_MIN = 10
@@ -48,6 +53,7 @@ class AppConfig:
     notified: dict = field(default_factory=dict)
     countdown_display: str = "dot"   # "dot" | "numeric"
     show_in_taskbar: bool = False
+    notifications_enabled: bool = True
     window_width: int = -1
     window_height: int = -1
 
@@ -65,6 +71,7 @@ def load_config() -> AppConfig:
             notified=raw.get("notified", {}),
             countdown_display=raw.get("countdown_display", "dot"),
             show_in_taskbar=raw.get("show_in_taskbar", False),
+            notifications_enabled=raw.get("notifications_enabled", True),
             window_width=raw.get("window_width", -1),
             window_height=raw.get("window_height", -1),
         )
@@ -83,6 +90,7 @@ def save_config(config: AppConfig) -> None:
         "notified": config.notified,
         "countdown_display": config.countdown_display,
         "show_in_taskbar": config.show_in_taskbar,
+        "notifications_enabled": config.notifications_enabled,
         "window_width": config.window_width,
         "window_height": config.window_height,
     }, indent=2))
@@ -461,7 +469,7 @@ if __name__ == "__main__":
             f'$t.SelectSingleNode(\'//text[@id="2"]\').InnerText = "{safe_message}"\n'
             "$n = [Windows.UI.Notifications.ToastNotification]::new($t)\n"
             '[Windows.UI.Notifications.ToastNotificationManager]::'
-            'CreateToastNotifier("Copilot Usage").Show($n)'
+            'CreateToastNotifier(APP_NAME).Show($n)'
         )
         subprocess.Popen(
             ["powershell", "-WindowStyle", "Hidden", "-Command", ps],
@@ -471,7 +479,8 @@ if __name__ == "__main__":
     # ── Widget UI ──────────────────────────────────────────────────────────────
     BAR_W = 160
     BAR_H = 18
-    PAD = 6
+    PAD = 4
+    PAD_V = 3
     DOT_SIZE = 8
     FONT = "Segoe UI"
     FONT_LABEL = (FONT, 9, "bold")
@@ -498,7 +507,7 @@ if __name__ == "__main__":
             self._last_reset: str = ""
 
             self._frame = tk.Frame(self.root, bg=BG)
-            self._frame.pack(padx=PAD, pady=PAD)
+            self._frame.pack(padx=PAD, pady=PAD_V)
             self._bar_widgets: list[dict] = []
             self._drag_x = 0
             self._drag_y = 0
@@ -568,23 +577,23 @@ if __name__ == "__main__":
                 ctypes.cast(p, ctypes.POINTER(ctypes.c_void_p))[0],
                 ctypes.POINTER(ctypes.c_void_p),
             )
-            HRESULT = ctypes.c_long
+            hresult = ctypes.c_long
 
-            HrInit = ctypes.CFUNCTYPE(HRESULT, ctypes.c_void_p)(vt[3])
-            HrInit(p)
+            hr_init = ctypes.CFUNCTYPE(hresult, ctypes.c_void_p)(vt[3])
+            hr_init(p)
 
-            _SetProgressValue = ctypes.CFUNCTYPE(
-                HRESULT, ctypes.c_void_p, ctypes.c_void_p,
+            set_progress_value = ctypes.CFUNCTYPE(
+                hresult, ctypes.c_void_p, ctypes.c_void_p,
                 ctypes.c_ulonglong, ctypes.c_ulonglong,
             )(vt[9])
-            _SetProgressState = ctypes.CFUNCTYPE(
-                HRESULT, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int,
+            set_progress_state = ctypes.CFUNCTYPE(
+                hresult, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int,
             )(vt[10])
             hwnd_ptr = ctypes.c_void_p(self._hwnd)
-            _SetProgressState(p, hwnd_ptr, 2)  # TBPF_NORMAL
+            set_progress_state(p, hwnd_ptr, 2)  # TBPF_NORMAL
 
             def _update(value: int, max_value: int):
-                _SetProgressValue(p, hwnd_ptr, value, max_value)
+                set_progress_value(p, hwnd_ptr, value, max_value)
 
             return _update
 
@@ -622,18 +631,16 @@ if __name__ == "__main__":
             self._bar_widgets.clear()
             self._bar_images.clear()
 
-            # Essential mode: bars side by side in a single row
+            # Essential mode: bars side by side, no separate label row
             for i, bar in enumerate(bars):
                 col_frame = tk.Frame(self._frame, bg=BG)
                 col_frame.grid(row=0, column=i, padx=(0, PAD if i < len(bars) - 1 else 0))
 
-                lbl = tk.Label(col_frame, text=bar.label, bg=BG, fg=FG, font=FONT_LABEL)
-                lbl.pack(anchor="w")
-
                 bar_lbl = tk.Label(col_frame, bg=BG)
                 bar_lbl.pack(anchor="w")
 
-                reset_lbl = tk.Label(col_frame, text="", bg=BG, fg="#888888", font=FONT_SMALL)
+                reset_lbl = tk.Label(col_frame, text="", bg=BG, fg="#888888",
+                                     font=FONT_SMALL)
                 reset_lbl.pack(anchor="w")
 
                 self._bar_widgets.append({
@@ -662,7 +669,7 @@ if __name__ == "__main__":
             # Header row: title + ≡
             hdr = tk.Frame(self._frame, bg=BG)
             hdr.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, PAD))
-            tk.Label(hdr, text="Copilot Usage", bg=BG, fg=FG, font=FONT_TITLE).pack(side="left")
+            tk.Label(hdr, text=APP_NAME, bg=BG, fg=FG, font=FONT_TITLE).pack(side="left")
             menu_btn = tk.Label(hdr, text="≡", bg=BG, fg="#aaaaaa", font=FONT_MENU, cursor="hand2")
             menu_btn._is_menu_btn = True
             menu_btn.bind("<Button-1>", lambda e: self._show_context_menu(e))
@@ -705,15 +712,87 @@ if __name__ == "__main__":
                 self.update_bars(self._last_bars, self._last_reset)
 
         def _show_context_menu(self, event):
-            menu = tk.Menu(self.root, tearoff=0, bg="#2d2d2d", fg=FG, activebackground="#444444")
-            mode = self.config.display_mode
-            other = "standard" if mode == "essential" else "essential"
-            menu.add_command(label=f"Switch to {other} mode", command=lambda: self.set_mode(other))
-            menu.add_separator()
-            menu.add_command(label="Refresh now", command=self._trigger_refresh)
-            menu.add_separator()
-            menu.add_command(label="Quit", command=self.root.destroy)
-            menu.tk_popup(event.x_root, event.y_root)
+            import tkinter.simpledialog as sd
+            m = tk.Menu(self.root, tearoff=0, bg="#2d2d2d", fg=FG,
+                        activebackground="#444444", font=FONT_SMALL)
+
+            m.add_command(label="↺  Refresh", command=self._trigger_refresh)
+            m.add_separator()
+
+            # Mode toggle
+            other_mode = "standard" if self.config.display_mode == "essential" else "essential"
+            m.add_command(label=f"⇅  {other_mode.title()} mode",
+                          command=lambda: self.set_mode(other_mode))
+            m.add_separator()
+
+            # Settings
+            m.add_command(
+                label=f"⏱  Refresh interval... ({self.config.refresh_interval}s)",
+                command=self._menu_set_refresh_interval,
+            )
+            notif_state = "ON" if self.config.notifications_enabled else "OFF"
+            m.add_command(
+                label=f"🔔  Notifications: {notif_state}",
+                command=self._menu_toggle_notifications,
+            )
+            taskbar_state = "ON" if self.config.show_in_taskbar else "OFF"
+            m.add_command(
+                label=f"📌  Taskbar icon: {taskbar_state}",
+                command=self._menu_toggle_taskbar_icon,
+            )
+            dot_state = "dot" if self.config.countdown_display == "dot" else "numeric"
+            m.add_command(
+                label=f"⏲  Countdown: {dot_state}",
+                command=self._menu_toggle_countdown,
+            )
+            m.add_separator()
+
+            # Auth / links
+            m.add_command(label="🔑  Re-authenticate", command=self._menu_reauthenticate)
+            m.add_command(label="⬡  Open Copilot",
+                          command=lambda: webbrowser.open(COPILOT_URL))
+            m.add_command(label="⌥  Open GitHub repo",
+                          command=lambda: webbrowser.open(GITHUB_REPO_URL))
+            m.add_command(label="{}  Open config.json",
+                          command=lambda: os.startfile(str(CONFIG_PATH)))
+            m.add_separator()
+
+            m.add_command(label="✕  Quit", command=self.root.destroy)
+            m.add_separator()
+            m.add_command(label=f"v{APP_VERSION}", state="disabled")
+
+            m.tk_popup(event.x_root, event.y_root)
+
+        def _menu_set_refresh_interval(self):
+            import tkinter.simpledialog as sd
+            val = sd.askinteger(
+                APP_NAME, f"Refresh interval (seconds, {POLL_MIN}–{POLL_MAX}):",
+                initialvalue=self.config.refresh_interval,
+                minvalue=POLL_MIN, maxvalue=POLL_MAX,
+                parent=self.root,
+            )
+            if val:
+                self.config.refresh_interval = val
+                save_config(self.config)
+
+        def _menu_toggle_notifications(self):
+            self.config.notifications_enabled = not self.config.notifications_enabled
+            save_config(self.config)
+
+        def _menu_toggle_taskbar_icon(self):
+            self.config.show_in_taskbar = not self.config.show_in_taskbar
+            save_config(self.config)
+
+        def _menu_toggle_countdown(self):
+            self.config.countdown_display = (
+                "numeric" if self.config.countdown_display == "dot" else "dot"
+            )
+            save_config(self.config)
+
+        def _menu_reauthenticate(self):
+            self.config.oauth_token = ""
+            save_config(self.config)
+            self._trigger_refresh()
 
         def _trigger_refresh(self):
             self._poll_once()
@@ -735,7 +814,7 @@ if __name__ == "__main__":
                     )
                     for t in to_fire:
                         send_toast(
-                            "Copilot Usage",
+                            APP_NAME,
                             f"{bar.label}: {bar.percent_used:.0f}% used ({bar.remaining} remaining)",
                         )
                         self.config.notified = record_notified(
@@ -772,7 +851,7 @@ if __name__ == "__main__":
             self._bar_images.clear()
             for i, bar in enumerate(bars):
                 color = bar_color(bar.percent_used)
-                overlay = f"{bar.percent_used:.0f}%"
+                overlay = f"{bar.label}: {bar.percent_used:.0f}%"
                 if stale:
                     overlay += " ⚠"
                 img = render_pill_bar(BAR_W, BAR_H, bar.percent_used, color,
@@ -791,8 +870,15 @@ if __name__ == "__main__":
                 # Measure after images are set so bar width is included
                 self.root.update_idletasks()
                 total_w = self._frame.winfo_reqwidth() + PAD * 2
-                total_h = self._frame.winfo_reqheight() + PAD * 2
-                anchor_to_taskbar(self.root, total_w, total_h)
+                total_h = self._frame.winfo_reqheight() + PAD_V * 2
+                if self.config.window_x >= 0 and self.config.window_y >= 0:
+                    # Saved drag position — resize in place, don't reanchor
+                    self.root.geometry(
+                        f"{total_w}x{total_h}"
+                        f"+{self.config.window_x}+{self.config.window_y}"
+                    )
+                else:
+                    anchor_to_taskbar(self.root, total_w, total_h)
                 self.root.update_idletasks()
                 self.config.window_width = self.root.winfo_width()
                 self.config.window_height = self.root.winfo_height()
