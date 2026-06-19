@@ -641,8 +641,9 @@ if __name__ == "__main__":
         def set_mode(self, mode: str):
             self.config.display_mode = mode
             save_config(self.config)
-            # Force rebuild on next update_bars call
             self._bar_widgets.clear()
+            if self._last_bars:
+                self.update_bars(self._last_bars, self._last_reset)
 
         def _show_context_menu(self, event):
             menu = tk.Menu(self.root, tearoff=0, bg="#2d2d2d", fg=FG, activebackground="#444444")
