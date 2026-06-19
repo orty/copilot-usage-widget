@@ -248,6 +248,48 @@ def format_bar_count(bar: QuotaBar) -> str:
     return base
 
 
+# ── Notification tracker ───────────────────────────────────────────────────────
+def thresholds_to_fire(
+    quota_id: str, percent_used: float, notified: dict, reset_date_utc: str
+) -> list[int]:
+    """Return thresholds not yet fired this billing period.
+
+    Args:
+        quota_id: Quota identifier (e.g. "premium_interactions").
+        percent_used: Current usage percentage (0-100+).
+        notified: Dict of {quota_id: {period: [thresholds]}}.
+        reset_date_utc: ISO 8601 reset date (e.g. "2026-07-01T00:00:00.000Z").
+
+    Returns:
+        List of thresholds from TOAST_THRESHOLDS that are >= percent_used and not yet fired.
+    """
+    period_key = reset_date_utc[:10]
+    fired = notified.get(quota_id, {}).get(period_key, [])
+    return [t for t in TOAST_THRESHOLDS if percent_used >= t and t not in fired]
+
+
+def record_notified(
+    notified: dict, quota_id: str, threshold: int, reset_date_utc: str
+) -> dict:
+    """Record a fired threshold for this billing period.
+
+    Does NOT mutate the input dict; returns a new dict with the threshold added.
+
+    Args:
+        notified: Dict of {quota_id: {period: [thresholds]}}.
+        quota_id: Quota identifier (e.g. "premium_interactions").
+        threshold: Threshold value to record (e.g. 75, 90, 95, 100).
+        reset_date_utc: ISO 8601 reset date (e.g. "2026-07-01T00:00:00.000Z").
+
+    Returns:
+        New dict with threshold added to the right period.
+    """
+    period_key = reset_date_utc[:10]
+    updated = {k: {pk: list(pv) for pk, pv in v.items()} for k, v in notified.items()}
+    updated.setdefault(quota_id, {}).setdefault(period_key, []).append(threshold)
+    return updated
+
+
 # ── Guard — everything below this line only runs when launched directly ────────
 if __name__ == "__main__":
     pass
