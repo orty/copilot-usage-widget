@@ -631,33 +631,32 @@ if __name__ == "__main__":
             self._bar_widgets.clear()
             self._bar_images.clear()
 
-            # Essential mode: bars side by side, no separate label row
+            # Essential: pure horizontal pack — no grid rows that inflate height
             for i, bar in enumerate(bars):
-                col_frame = tk.Frame(self._frame, bg=BG)
-                col_frame.grid(row=0, column=i, padx=(0, PAD if i < len(bars) - 1 else 0))
+                col = tk.Frame(self._frame, bg=BG)
+                col.pack(side="left", padx=(0, PAD if i < len(bars) - 1 else 0))
 
-                bar_lbl = tk.Label(col_frame, bg=BG)
+                bar_lbl = tk.Label(col, bg=BG)
                 bar_lbl.pack(anchor="w")
 
-                reset_lbl = tk.Label(col_frame, text="", bg=BG, fg="#888888",
-                                     font=FONT_SMALL)
+                reset_lbl = tk.Label(col, text="", bg=BG, fg="#888888", font=FONT_SMALL)
                 reset_lbl.pack(anchor="w")
 
-                self._bar_widgets.append({
-                    "bar_lbl": bar_lbl,
-                    "reset_lbl": reset_lbl,
-                })
+                self._bar_widgets.append({"bar_lbl": bar_lbl, "reset_lbl": reset_lbl})
 
-            # Pulsing dot
-            self._dot_lbl = tk.Label(self._frame, bg=BG)
-            self._dot_lbl.grid(row=1, column=len(bars), padx=(PAD, 0), sticky="w")
+            # Dot + ≡ in compact right column
+            ctrl = tk.Frame(self._frame, bg=BG)
+            ctrl.pack(side="left", padx=(PAD, 0))
 
-            # Hamburger menu button
-            menu_btn = tk.Label(self._frame, text="≡", bg="#2a2a2a", fg="#cccccc",
+            menu_btn = tk.Label(ctrl, text="≡", bg="#2a2a2a", fg="#cccccc",
                                 font=FONT_LABEL, cursor="hand2", padx=3)
             menu_btn._is_menu_btn = True
             menu_btn.bind("<Button-1>", lambda e: self._show_context_menu(e))
-            menu_btn.grid(row=0, column=len(bars), padx=(PAD, 0), sticky="ne")
+            menu_btn.pack(anchor="n")
+
+            self._dot_lbl = tk.Label(ctrl, bg=BG)
+            self._dot_lbl.pack(anchor="s")
+
             self._bind_widgets(self._frame)
 
         def _rebuild_standard_frame(self, bars: list[QuotaBar]):
