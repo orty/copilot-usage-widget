@@ -37,9 +37,10 @@ jobs:
 
       - name: Build with PyInstaller (onedir)
         run: |
+          $icon = Resolve-Path "assets\icon.ico"
           pyinstaller --noconfirm --clean --windowed `
             --name "CopilotUsage" `
-            --icon "assets\icon.ico" `
+            --icon "$icon" `
             --exclude-module numpy `
             --distpath "build\dist" `
             --workpath "build\pyi-work" `
