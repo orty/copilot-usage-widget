@@ -1,6 +1,7 @@
 """Copilot Usage Widget — monitors GitHub Copilot Enterprise premium interaction credits."""
 from __future__ import annotations
 
+import ctypes
 import json
 import os
 import subprocess
@@ -628,7 +629,50 @@ if __name__ == "__main__":
             menu.tk_popup(event.x_root, event.y_root)
 
         def _trigger_refresh(self):
-            pass  # Task 12 will fill this in
+            self._poll_once()
+
+        def _poll_once(self):
+            stale = False
+            bars: list[QuotaBar] = []
+            reset_date_utc = ""
+            try:
+                token = ensure_authenticated(self.config)
+                data = fetch_user_data(token)
+                bars = parse_quotas(data)
+                reset_date_utc = data.get("quota_reset_date_utc", "")
+                self.config.oauth_token = token
+
+                for bar in bars:
+                    to_fire = thresholds_to_fire(
+                        bar.id, bar.percent_used, self.config.notified, reset_date_utc
+                    )
+                    for t in to_fire:
+                        send_toast(
+                            "Copilot Usage",
+                            f"{bar.label}: {bar.percent_used:.0f}% used ({bar.remaining} remaining)",
+                        )
+                        self.config.notified = record_notified(
+                            self.config.notified, bar.id, t, reset_date_utc
+                        )
+                save_config(self.config)
+            except RuntimeError:
+                stale = True
+                bars = getattr(self, "_last_bars", [])
+                reset_date_utc = getattr(self, "_last_reset", "")
+
+            if bars:
+                self._last_bars = bars
+                self._last_reset = reset_date_utc
+                self.update_bars(bars, reset_date_utc, stale=stale)
+                self.set_taskbar_progress(int(bars[0].percent_used), 100)
+            self._schedule_next_poll()
+
+        def _schedule_next_poll(self):
+            interval_ms = self.config.refresh_interval * 1000
+            self.root.after(interval_ms, self._check_and_poll)
+
+        def _check_and_poll(self):
+            self._poll_once()
 
         def update_bars(self, bars: list[QuotaBar], reset_date_utc: str, stale: bool = False):
             if len(bars) != len(self._bar_widgets):
@@ -664,4 +708,9 @@ if __name__ == "__main__":
             self.pulse_dot()
             self.root.mainloop()
 
-    # (UI and main loop added in Tasks 9-12)
+    # ── Launch ──────────────────────────────────────────────────────────────
+    ctypes.windll.ole32.CoInitialize(None)
+    _config = load_config()
+    _app = WidgetApp(_config)
+    _app.root.after(500, _app._poll_once)
+    _app.run()
