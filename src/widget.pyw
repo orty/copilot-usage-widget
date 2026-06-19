@@ -418,6 +418,24 @@ if __name__ == "__main__":
         root.geometry(f"{widget_w}x{widget_h}+{x}+{y}")
         return x, y
 
+    # ── Toast notifications ────────────────────────────────────────────────────
+    def send_toast(title: str, message: str) -> None:
+        ps = (
+            "[Windows.UI.Notifications.ToastNotificationManager, "
+            "Windows.UI.Notifications, ContentType=WindowsRuntime] | Out-Null\n"
+            "$t = [Windows.UI.Notifications.ToastNotificationManager]::"
+            "GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)\n"
+            f'$t.SelectSingleNode(\'//text[@id="1"]\').InnerText = "{title}"\n'
+            f'$t.SelectSingleNode(\'//text[@id="2"]\').InnerText = "{message}"\n'
+            "$n = [Windows.UI.Notifications.ToastNotification]::new($t)\n"
+            '[Windows.UI.Notifications.ToastNotificationManager]::'
+            'CreateToastNotifier("Copilot Usage").Show($n)'
+        )
+        subprocess.Popen(
+            ["powershell", "-WindowStyle", "Hidden", "-Command", ps],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+
     # ── Widget UI ──────────────────────────────────────────────────────────────
     BAR_W = 160
     BAR_H = 18
@@ -453,7 +471,66 @@ if __name__ == "__main__":
             hwnd = int(self.root.wm_frame(), 16)
             setup_window_flags(hwnd)
             self._hwnd = hwnd
+            self._taskbar_progress = self._setup_taskbar_progress()
             # Position will be set on first update_bars call
+
+        def _setup_taskbar_progress(self):
+            import uuid
+            CLSID = "{56FDF344-FD6D-11d0-958A-006097C9A090}"
+            IID   = "{EA1AFB91-9E28-4B86-90E9-9E9F8A5EEFAF}"
+
+            class _GUID(ctypes.Structure):
+                _fields_ = [
+                    ("Data1", ctypes.c_ulong), ("Data2", ctypes.c_ushort),
+                    ("Data3", ctypes.c_ushort), ("Data4", ctypes.c_byte * 8),
+                ]
+
+            def _to_guid(s):
+                u = uuid.UUID(s)
+                b = u.bytes_le
+                return _GUID(
+                    int.from_bytes(b[:4], "little"),
+                    int.from_bytes(b[4:6], "little"),
+                    int.from_bytes(b[6:8], "little"),
+                    (ctypes.c_byte * 8)(*b[8:]),
+                )
+
+            ole32 = ctypes.windll.ole32
+            clsid, iid = _to_guid(CLSID), _to_guid(IID)
+            p = ctypes.c_void_p()
+            if ole32.CoCreateInstance(ctypes.byref(clsid), None, 1, ctypes.byref(iid), ctypes.byref(p)):
+                return None
+
+            vt = ctypes.cast(
+                ctypes.cast(p, ctypes.POINTER(ctypes.c_void_p))[0],
+                ctypes.POINTER(ctypes.c_void_p),
+            )
+            HRESULT = ctypes.c_long
+
+            HrInit = ctypes.CFUNCTYPE(HRESULT, ctypes.c_void_p)(vt[3])
+            HrInit(p)
+
+            _SetProgressValue = ctypes.CFUNCTYPE(
+                HRESULT, ctypes.c_void_p, ctypes.c_void_p,
+                ctypes.c_ulonglong, ctypes.c_ulonglong,
+            )(vt[9])
+            _SetProgressState = ctypes.CFUNCTYPE(
+                HRESULT, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int,
+            )(vt[10])
+            hwnd_ptr = ctypes.c_void_p(self._hwnd)
+            _SetProgressState(p, hwnd_ptr, 2)  # TBPF_NORMAL
+
+            def _update(value: int, max_value: int):
+                _SetProgressValue(p, hwnd_ptr, value, max_value)
+
+            return _update
+
+        def set_taskbar_progress(self, value: int, max_value: int) -> None:
+            if hasattr(self, "_taskbar_progress") and self._taskbar_progress:
+                try:
+                    self._taskbar_progress(value, max_value)
+                except Exception:
+                    pass
 
         def _rebuild_essential_frame(self, bars: list[QuotaBar]):
             for w in self._frame.winfo_children():
