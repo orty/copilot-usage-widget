@@ -19,7 +19,7 @@ from typing import Optional
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 APP_NAME = "Copilot Usage"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 GITHUB_REPO_URL = "https://github.com/SergeARADJ/copilot-usage-widget"
 COPILOT_URL = "https://github.com/features/copilot"
 UPDATE_API_URL = "https://api.github.com/repos/SergeARADJ/copilot-usage-widget/releases/latest"
@@ -371,11 +371,11 @@ def render_pill_bar(
     # Overlay text centered on final-resolution image
     if overlay_text:
         d = ImageDraw.Draw(img)
-        bbox = d.textbbox((0, 0), overlay_text)
+        bbox = d.textbbox((0, 0), overlay_text, stroke_width=1)
         tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
         tx, ty = (width - tw) // 2, (height - th) // 2 - 1
         d.text((tx + 1, ty + 1), overlay_text, fill=(0, 0, 0, 160))   # shadow
-        d.text((tx, ty), overlay_text, fill=(255, 255, 255, 230))
+        d.text((tx, ty), overlay_text, fill=(255, 255, 255, 230), stroke_width=1, stroke_fill=(255, 255, 255, 200))
 
     return ImageTk.PhotoImage(img)
 
@@ -965,7 +965,10 @@ if __name__ == "__main__":
             self._bar_images.clear()
             for i, bar in enumerate(bars):
                 color = bar_color(bar.percent_used)
-                overlay = f"{bar.label}: {bar.percent_used:.0f}%"
+                if self.config.display_mode != "standard" and len(bars) == 1:
+                    overlay = f"{bar.percent_used:.0f}%"
+                else:
+                    overlay = f"{bar.label}: {bar.percent_used:.0f}%"
                 if stale:
                     overlay += " ⚠"
                 img = render_pill_bar(BAR_W, BAR_H, bar.percent_used, color,
