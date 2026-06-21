@@ -1,7 +1,6 @@
-__pycache__/
-*.pyc
-.pytest_cache/
+node_modules/
 dist/
-build/
-releases/
-*.spec
+out/
+*.log
+.DS_Store
+.env
