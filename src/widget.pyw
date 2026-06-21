@@ -19,10 +19,10 @@ from typing import Optional
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 APP_NAME = "Copilot Usage"
-APP_VERSION = "1.0.1"
-GITHUB_REPO_URL = "https://github.com/SergeARADJ/copilot-usage-widget"
+APP_VERSION = "2.0.1"
+GITHUB_REPO_URL = "https://github.com/orty/copilot-usage-widget"
 COPILOT_URL = "https://github.com/features/copilot"
-UPDATE_API_URL = "https://api.github.com/repos/SergeARADJ/copilot-usage-widget/releases/latest"
+UPDATE_API_URL = "https://api.github.com/repos/orty/copilot-usage-widget/releases/latest"
 UPDATE_RELEASES_URL = f"{GITHUB_REPO_URL}/releases"
 UPDATE_ASSET_NAME = "CopilotUsage-Setup.exe"
 UPDATE_CHECK_INTERVAL_S = 24 * 3600   # throttle: re-check at most once per day
@@ -37,6 +37,45 @@ COLOR_NORMAL = "#0969da"
 COLOR_WARNING = "#d4a017"
 COLOR_CRITICAL = "#cf222e"
 LABEL_MAP = {"premium_interactions": "Premium"}
+
+
+# ── Subprocess / network helpers ────────────────────────────────────────────────
+# On Windows a console subprocess (curl, gh, powershell) briefly flashes a cmd
+# window. CREATE_NO_WINDOW + a hidden STARTUPINFO suppress it. No-op elsewhere.
+_CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+
+
+def _no_window_kwargs() -> dict:
+    """subprocess kwargs that suppress the console window on Windows."""
+    if sys.platform != "win32":
+        return {}
+    si = subprocess.STARTUPINFO()
+    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    si.wShowWindow = subprocess.SW_HIDE
+    return {"creationflags": _CREATE_NO_WINDOW, "startupinfo": si}
+
+
+def _ssl_context() -> ssl.SSLContext:
+    """Default SSL context, preferring certifi's CA bundle when available.
+
+    A frozen (PyInstaller) build often lacks the system CA store, which makes
+    urllib HTTPS fail with CERTIFICATE_VERIFY_FAILED. certifi ships a bundle so
+    the auto-update check and API call work the same way curl did.
+    """
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        return ctx
+
+
+def _http_get_json(url: str, headers: dict, timeout: int = 15) -> dict:
+    """GET a URL and parse JSON. Pure urllib — never spawns a console window."""
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 
 # ── QuotaBar dataclass ─────────────────────────────────────────────────────────
@@ -115,6 +154,7 @@ def get_gh_token() -> Optional[str]:
             capture_output=True,
             text=True,
             timeout=10,
+            **_no_window_kwargs(),
         )
         token = result.stdout.strip()
         return token if token else None
@@ -140,7 +180,8 @@ def ensure_authenticated(config: AppConfig) -> str:
 
     # gh installed but not logged in — trigger device flow
     try:
-        subprocess.run(["gh", "auth", "login", "--web"], check=False, timeout=300)
+        subprocess.run(["gh", "auth", "login", "--web"], check=False, timeout=300,
+                       **_no_window_kwargs())
     except subprocess.TimeoutExpired:
         pass
     token = get_gh_token()
@@ -168,6 +209,9 @@ def humanize_label(quota_id: str) -> str:
 def fetch_user_data(token: str) -> dict:
     """Fetch user quota data from GitHub API.
 
+    Uses urllib instead of a curl subprocess so no console window flashes on
+    every refresh.
+
     Args:
         token: GitHub personal access token.
 
@@ -175,21 +219,17 @@ def fetch_user_data(token: str) -> dict:
         Parsed JSON response containing quota_snapshots.
 
     Raises:
-        RuntimeError: If curl request fails.
+        RuntimeError: If the request fails.
     """
-    result = subprocess.run(
-        ["curl", "-s", "--fail",
-         "-H", f"Authorization: Bearer {token}",
-         "-H", "Accept: application/json",
-         API_URL],
-        capture_output=True,
-        timeout=15,
-    )
-
-    if result.returncode != 0:
-        raise RuntimeError(f"curl failed (exit {result.returncode}): {result.stderr.decode()}")
-
-    return json.loads(result.stdout)
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+        "User-Agent": f"CopilotUsageWidget/{APP_VERSION}",
+    }
+    try:
+        return _http_get_json(API_URL, headers, timeout=15)
+    except (urllib.error.URLError, OSError, json.JSONDecodeError) as e:
+        raise RuntimeError(f"API request failed: {e}") from e
 
 
 def parse_quotas(data: dict) -> list[QuotaBar]:
@@ -409,17 +449,14 @@ def is_newer_version(latest: str, current: str = APP_VERSION) -> bool:
 def check_latest_release() -> Optional[dict]:
     """Query GitHub Releases API. Returns dict or None on failure/draft/pre-release."""
     try:
-        req = urllib.request.Request(
+        data = _http_get_json(
             UPDATE_API_URL,
-            headers={
+            {
                 "User-Agent": f"CopilotUsageWidget/{APP_VERSION}",
                 "Accept": "application/vnd.github+json",
             },
+            timeout=10,
         )
-        ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-        with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
     except (urllib.error.URLError, json.JSONDecodeError, OSError):
         return None
     if data.get("draft") or data.get("prerelease"):
@@ -455,26 +492,18 @@ if __name__ == "__main__":
     SWP_NOACTIVATE = 0x0010
     DWMWA_WINDOW_CORNER_PREFERENCE = 33
     DWMWCP_ROUND = 2
-    ABM_GETTASKBARPOS = 0x00000005
+    SPI_GETWORKAREA = 0x0030
+    SM_CXSCREEN = 0
+    SM_CYSCREEN = 1
+    EDGE_MARGIN = 4  # gap between widget and work-area edge
 
     user32 = ctypes.windll.user32
     dwmapi = ctypes.windll.dwmapi
-    shell32 = ctypes.windll.shell32
 
     class _RECT(ctypes.Structure):
         _fields_ = [
             ("left", wintypes.LONG), ("top", wintypes.LONG),
             ("right", wintypes.LONG), ("bottom", wintypes.LONG),
-        ]
-
-    class _APPBARDATA(ctypes.Structure):
-        _fields_ = [
-            ("cbSize", wintypes.DWORD),
-            ("hWnd", wintypes.HWND),
-            ("uCallbackMessage", wintypes.UINT),
-            ("uEdge", wintypes.UINT),
-            ("rc", _RECT),
-            ("lParam", ctypes.c_long),
         ]
 
     # ── Win32 functions ────────────────────────────────────────────────────────
@@ -495,40 +524,37 @@ if __name__ == "__main__":
         except Exception:
             pass  # Win10: square corners
 
-    def get_taskbar_rect() -> tuple[int, int, int, int]:
-        data = _APPBARDATA()
-        data.cbSize = ctypes.sizeof(_APPBARDATA)
-        shell32.SHAppBarMessage(ABM_GETTASKBARPOS, ctypes.byref(data))
-        r = data.rc
-        return r.left, r.top, r.right - r.left, r.bottom - r.top
+    def get_work_area() -> tuple[int, int, int, int]:
+        """Usable desktop rect (screen minus taskbar) of the primary monitor.
+
+        SPI_GETWORKAREA already excludes the taskbar on whichever edge it sits
+        (bottom/top/left/right, auto-hide reserve included), so a window placed
+        inside this rect can never overlap the taskbar — that overlap was the
+        root cause of the widget hiding behind it. Falls back to full screen.
+
+        Returns (x, y, width, height).
+        """
+        r = _RECT()
+        ok = user32.SystemParametersInfoW(SPI_GETWORKAREA, 0, ctypes.byref(r), 0)
+        if ok and r.right > r.left and r.bottom > r.top:
+            return r.left, r.top, r.right - r.left, r.bottom - r.top
+        return 0, 0, user32.GetSystemMetrics(SM_CXSCREEN), user32.GetSystemMetrics(SM_CYSCREEN)
+
+    def clamp_to_work_area(x: int, y: int, widget_w: int, widget_h: int) -> tuple[int, int]:
+        """Constrain a window rect so it stays fully inside the work area."""
+        wx, wy, ww, wh = get_work_area()
+        x = max(wx, min(x, wx + ww - widget_w))
+        y = max(wy, min(y, wy + wh - widget_h))
+        return x, y
 
     def anchor_to_taskbar(root: tk.Tk, widget_w: int, widget_h: int) -> tuple[int, int]:
-        tb_left, tb_top, tb_w, tb_h = get_taskbar_rect()
-        screen_w = root.winfo_screenwidth()
-        screen_h = root.winfo_screenheight()
-
-        # Determine taskbar position (bottom/top/left/right)
-        if tb_top + tb_h >= screen_h - 2:
-            # Taskbar at bottom — place widget above it with 4px clearance
-            x = max(4, screen_w - widget_w - 4)
-            y = tb_top - widget_h - 4
-        elif tb_top <= 2:
-            # Taskbar at top — place widget below it
-            x = max(4, screen_w - widget_w - 4)
-            y = tb_top + tb_h + 4
-        elif tb_left <= 2:
-            # Taskbar on left — place widget to the right
-            x = tb_left + tb_w + 4
-            y = max(4, screen_h - widget_h - 4)
-        else:
-            # Taskbar on right — place widget to the left
-            x = tb_left - widget_w - 4
-            y = max(4, screen_h - widget_h - 4)
-
-        # Clamp to screen bounds
-        x = max(0, min(x, screen_w - widget_w))
-        y = max(0, min(y, screen_h - widget_h))
-
+        """Anchor the widget to the bottom-right corner of the usable work area."""
+        wx, wy, ww, wh = get_work_area()
+        x, y = clamp_to_work_area(
+            wx + ww - widget_w - EDGE_MARGIN,
+            wy + wh - widget_h - EDGE_MARGIN,
+            widget_w, widget_h,
+        )
         root.geometry(f"{widget_w}x{widget_h}+{x}+{y}")
         return x, y
 
@@ -550,6 +576,7 @@ if __name__ == "__main__":
         subprocess.Popen(
             ["powershell", "-WindowStyle", "Hidden", "-Command", ps],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            **_no_window_kwargs(),
         )
 
     # ── Widget UI ──────────────────────────────────────────────────────────────
@@ -612,37 +639,10 @@ if __name__ == "__main__":
             self.root.geometry(f"+{x}+{y}")
 
         def _end_drag(self, event: tk.Event) -> None:
-            x, y = self.root.winfo_x(), self.root.winfo_y()
+            # Snap back inside the work area so the widget can never be dragged
+            # behind the taskbar (or off-screen).
             w, h = self.root.winfo_width(), self.root.winfo_height()
-            screen_w, screen_h = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-            tb_left, tb_top, tb_w, tb_h = get_taskbar_rect()
-
-            # Constrain to screen bounds
-            x = max(0, min(x, screen_w - w))
-            y = max(0, min(y, screen_h - h))
-
-            # Enforce taskbar clearance
-            if tb_top + tb_h >= screen_h - 2:
-                # Taskbar at bottom
-                if y + h > tb_top:
-                    y = tb_top - h - 4
-            elif tb_top <= 2:
-                # Taskbar at top
-                if y < tb_top + tb_h:
-                    y = tb_top + tb_h + 4
-            elif tb_left <= 2:
-                # Taskbar on left
-                if x < tb_left + tb_w:
-                    x = tb_left + tb_w + 4
-            else:
-                # Taskbar on right
-                if x + w > tb_left:
-                    x = tb_left - w - 4
-
-            # Final clamp
-            x = max(0, min(x, screen_w - w))
-            y = max(0, min(y, screen_h - h))
-
+            x, y = clamp_to_work_area(self.root.winfo_x(), self.root.winfo_y(), w, h)
             self.config.window_x = x
             self.config.window_y = y
             self.root.geometry(f"+{x}+{y}")
@@ -1042,11 +1042,14 @@ if __name__ == "__main__":
                 total_w = self._frame.winfo_reqwidth() + PAD * 2
                 total_h = self._frame.winfo_reqheight() + PAD_V * 2
                 if self.config.window_x >= 0 and self.config.window_y >= 0:
-                    # Saved drag position — resize in place, don't reanchor
-                    self.root.geometry(
-                        f"{total_w}x{total_h}"
-                        f"+{self.config.window_x}+{self.config.window_y}"
+                    # Saved drag position — keep it, but clamp into the work area
+                    # in case a stale config (or a resolution change) left it
+                    # behind the taskbar or off-screen.
+                    x, y = clamp_to_work_area(
+                        self.config.window_x, self.config.window_y, total_w, total_h
                     )
+                    self.config.window_x, self.config.window_y = x, y
+                    self.root.geometry(f"{total_w}x{total_h}+{x}+{y}")
                 else:
                     anchor_to_taskbar(self.root, total_w, total_h)
                 self.root.update_idletasks()

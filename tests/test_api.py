@@ -50,19 +50,21 @@ def test_humanize_label_single_word(W):
 
 
 def test_fetch_user_data_success(W):
-    """fetch_user_data calls curl with correct headers and returns parsed JSON."""
-    mock_result = MagicMock(returncode=0, stdout=json.dumps(SAMPLE_RESPONSE).encode())
-    with patch("subprocess.run", return_value=mock_result):
+    """fetch_user_data fetches via urllib (no subprocess) with a Bearer header."""
+    with patch.object(W, "_http_get_json", return_value=SAMPLE_RESPONSE) as m:
         data = W.fetch_user_data("gho_token")
         assert data["login"] == "testuser"
         assert "quota_snapshots" in data
+        args, _ = m.call_args
+        assert args[0] == W.API_URL
+        assert args[1]["Authorization"] == "Bearer gho_token"
 
 
-def test_fetch_user_data_curl_failure(W):
-    """fetch_user_data raises RuntimeError on curl failure."""
-    mock_result = MagicMock(returncode=22, stderr=b"404 Not Found")
-    with patch("subprocess.run", return_value=mock_result):
-        with pytest.raises(RuntimeError, match="curl failed"):
+def test_fetch_user_data_request_failure(W):
+    """fetch_user_data raises RuntimeError when the HTTP request fails."""
+    import urllib.error
+    with patch.object(W, "_http_get_json", side_effect=urllib.error.URLError("boom")):
+        with pytest.raises(RuntimeError, match="API request failed"):
             W.fetch_user_data("gho_bad_token")
 
 

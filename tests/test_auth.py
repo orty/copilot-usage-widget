@@ -11,12 +11,14 @@ def test_get_gh_token_success(W):
     with patch("subprocess.run", return_value=mock_result) as mock_run:
         token = W.get_gh_token()
         assert token == "gho_testtoken123"
-        mock_run.assert_called_once_with(
-            ["gh", "auth", "token"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        # Exact-match would break on the platform-specific no-window kwargs,
+        # so assert the command and core kwargs explicitly.
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        assert args[0] == ["gh", "auth", "token"]
+        assert kwargs["capture_output"] is True
+        assert kwargs["text"] is True
+        assert kwargs["timeout"] == 10
 
 
 def test_get_gh_token_gh_not_found(W):
