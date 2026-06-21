@@ -499,6 +499,7 @@ if __name__ == "__main__":
 
     user32 = ctypes.windll.user32
     dwmapi = ctypes.windll.dwmapi
+    user32.SystemParametersInfoW.restype = ctypes.c_int  # explicit BOOL for unambiguous success check
 
     class _RECT(ctypes.Structure):
         _fields_ = [
