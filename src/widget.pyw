@@ -19,7 +19,7 @@ from typing import Optional
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 APP_NAME = "Copilot Usage"
-APP_VERSION = "2.0.1"
+APP_VERSION = "2.0.2"
 GITHUB_REPO_URL = "https://github.com/orty/copilot-usage-widget"
 COPILOT_URL = "https://github.com/features/copilot"
 UPDATE_API_URL = "https://api.github.com/repos/orty/copilot-usage-widget/releases/latest"
@@ -370,6 +370,22 @@ def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
     return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
 
 
+def _load_font(px: int):
+    """Load Segoe UI (regular) at the given pixel size.
+
+    A real TrueType font renders crisply when supersampled and downscaled;
+    PIL's bitmap default font looks blurry and heavy at small sizes. Falls
+    back through common Windows fonts, then to the bitmap default.
+    """
+    from PIL import ImageFont
+    for name in ("segoeui.ttf", "tahoma.ttf", "arial.ttf"):
+        try:
+            return ImageFont.truetype(name, px)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
 def render_pill_bar(
     width: int,
     height: int,
@@ -406,17 +422,18 @@ def render_pill_bar(
         mask_draw.rectangle([0, 0, fill_w, H], fill=255)
         img.paste(clip_img, mask=mask)
 
-    img = img.resize((width, height), Image.LANCZOS)
-
-    # Overlay text centered on final-resolution image
+    # Overlay text — drawn at 4x supersample, then downscaled with the bar so it
+    # is crisply anti-aliased (no bitmap-font blur) and not stroke-bolded.
     if overlay_text:
-        d = ImageDraw.Draw(img)
-        bbox = d.textbbox((0, 0), overlay_text, stroke_width=1)
+        font = _load_font(int(height * scale * 0.6))
+        bbox = draw.textbbox((0, 0), overlay_text, font=font)
         tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        tx, ty = (width - tw) // 2, (height - th) // 2 - 1
-        d.text((tx + 1, ty + 1), overlay_text, fill=(0, 0, 0, 160))   # shadow
-        d.text((tx, ty), overlay_text, fill=(255, 255, 255, 230), stroke_width=1, stroke_fill=(255, 255, 255, 200))
+        tx = (W - tw) // 2 - bbox[0]
+        ty = (H - th) // 2 - bbox[1]
+        draw.text((tx + scale, ty + scale), overlay_text, font=font, fill=(0, 0, 0, 150))  # shadow
+        draw.text((tx, ty), overlay_text, font=font, fill=(255, 255, 255, 255))
 
+    img = img.resize((width, height), Image.LANCZOS)
     return ImageTk.PhotoImage(img)
 
 
@@ -492,20 +509,11 @@ if __name__ == "__main__":
     SWP_NOACTIVATE = 0x0010
     DWMWA_WINDOW_CORNER_PREFERENCE = 33
     DWMWCP_ROUND = 2
-    SPI_GETWORKAREA = 0x0030
-    SM_CXSCREEN = 0
-    SM_CYSCREEN = 1
-    EDGE_MARGIN = 4  # gap between widget and work-area edge
+    KEEP_ON_TOP_MS = 1000  # re-assert topmost so we stay above the taskbar
+    EDGE_MARGIN = 4        # gap between widget and screen edge
 
     user32 = ctypes.windll.user32
     dwmapi = ctypes.windll.dwmapi
-    user32.SystemParametersInfoW.restype = ctypes.c_int  # explicit BOOL for unambiguous success check
-
-    class _RECT(ctypes.Structure):
-        _fields_ = [
-            ("left", wintypes.LONG), ("top", wintypes.LONG),
-            ("right", wintypes.LONG), ("bottom", wintypes.LONG),
-        ]
 
     # ── Win32 functions ────────────────────────────────────────────────────────
     def setup_window_flags(hwnd: int) -> None:
@@ -525,35 +533,25 @@ if __name__ == "__main__":
         except Exception:
             pass  # Win10: square corners
 
-    def get_work_area() -> tuple[int, int, int, int]:
-        """Usable desktop rect (screen minus taskbar) of the primary monitor.
+    def clamp_to_screen(root: tk.Tk, x: int, y: int, widget_w: int, widget_h: int) -> tuple[int, int]:
+        """Keep the window on-screen while still letting it overlap the taskbar.
 
-        SPI_GETWORKAREA already excludes the taskbar on whichever edge it sits
-        (bottom/top/left/right, auto-hide reserve included), so a window placed
-        inside this rect can never overlap the taskbar — that overlap was the
-        root cause of the widget hiding behind it. Falls back to full screen.
-
-        Returns (x, y, width, height).
+        Uses the full screen size (not the work area) on purpose: the widget is
+        meant to sit *over* the taskbar. We only stop it from leaving the screen
+        entirely. Staying in front of the taskbar is handled by keep_on_top().
         """
-        r = _RECT()
-        ok = user32.SystemParametersInfoW(SPI_GETWORKAREA, 0, ctypes.byref(r), 0)
-        if ok and r.right > r.left and r.bottom > r.top:
-            return r.left, r.top, r.right - r.left, r.bottom - r.top
-        return 0, 0, user32.GetSystemMetrics(SM_CXSCREEN), user32.GetSystemMetrics(SM_CYSCREEN)
-
-    def clamp_to_work_area(x: int, y: int, widget_w: int, widget_h: int) -> tuple[int, int]:
-        """Constrain a window rect so it stays fully inside the work area."""
-        wx, wy, ww, wh = get_work_area()
-        x = max(wx, min(x, wx + ww - widget_w))
-        y = max(wy, min(y, wy + wh - widget_h))
+        sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+        x = max(0, min(x, sw - widget_w))
+        y = max(0, min(y, sh - widget_h))
         return x, y
 
     def anchor_to_taskbar(root: tk.Tk, widget_w: int, widget_h: int) -> tuple[int, int]:
-        """Anchor the widget to the bottom-right corner of the usable work area."""
-        wx, wy, ww, wh = get_work_area()
-        x, y = clamp_to_work_area(
-            wx + ww - widget_w - EDGE_MARGIN,
-            wy + wh - widget_h - EDGE_MARGIN,
+        """Anchor the widget to the bottom-right, overlapping the taskbar."""
+        sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+        x, y = clamp_to_screen(
+            root,
+            sw - widget_w - EDGE_MARGIN,
+            sh - widget_h - EDGE_MARGIN,
             widget_w, widget_h,
         )
         root.geometry(f"{widget_w}x{widget_h}+{x}+{y}")
@@ -640,10 +638,9 @@ if __name__ == "__main__":
             self.root.geometry(f"+{x}+{y}")
 
         def _end_drag(self, event: tk.Event) -> None:
-            # Snap back inside the work area so the widget can never be dragged
-            # behind the taskbar (or off-screen).
+            # Keep on-screen but allow the widget to rest over the taskbar.
             w, h = self.root.winfo_width(), self.root.winfo_height()
-            x, y = clamp_to_work_area(self.root.winfo_x(), self.root.winfo_y(), w, h)
+            x, y = clamp_to_screen(self.root, self.root.winfo_x(), self.root.winfo_y(), w, h)
             self.config.window_x = x
             self.config.window_y = y
             self.root.geometry(f"+{x}+{y}")
@@ -654,7 +651,27 @@ if __name__ == "__main__":
             setup_window_flags(hwnd)
             self._hwnd = hwnd
             self._taskbar_progress = self._setup_taskbar_progress()
+            self._keep_on_top()  # start the topmost-watchdog loop
             # Position will be set on first update_bars call
+
+        def _keep_on_top(self):
+            """Re-assert HWND_TOPMOST periodically.
+
+            The Windows taskbar is itself a topmost window, so a one-time
+            topmost flag isn't enough — the widget can slip behind it. Bumping
+            our z-order on a timer keeps the widget sitting *over* the taskbar.
+            SWP_NOACTIVATE means this never steals focus.
+            """
+            hwnd = getattr(self, "_hwnd", None)
+            if hwnd:
+                try:
+                    user32.SetWindowPos(
+                        hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    )
+                except Exception:
+                    pass
+            self.root.after(KEEP_ON_TOP_MS, self._keep_on_top)
 
         def _setup_taskbar_progress(self):
             import uuid
@@ -1043,11 +1060,11 @@ if __name__ == "__main__":
                 total_w = self._frame.winfo_reqwidth() + PAD * 2
                 total_h = self._frame.winfo_reqheight() + PAD_V * 2
                 if self.config.window_x >= 0 and self.config.window_y >= 0:
-                    # Saved drag position — keep it, but clamp into the work area
-                    # in case a stale config (or a resolution change) left it
-                    # behind the taskbar or off-screen.
-                    x, y = clamp_to_work_area(
-                        self.config.window_x, self.config.window_y, total_w, total_h
+                    # Saved drag position — keep it, clamping only so it stays
+                    # on-screen (overlapping the taskbar is allowed/intended).
+                    x, y = clamp_to_screen(
+                        self.root, self.config.window_x, self.config.window_y,
+                        total_w, total_h
                     )
                     self.config.window_x, self.config.window_y = x, y
                     self.root.geometry(f"{total_w}x{total_h}+{x}+{y}")
