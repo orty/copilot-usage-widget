@@ -503,11 +503,32 @@ if __name__ == "__main__":
         return r.left, r.top, r.right - r.left, r.bottom - r.top
 
     def anchor_to_taskbar(root: tk.Tk, widget_w: int, widget_h: int) -> tuple[int, int]:
-        _, _, _, th = get_taskbar_rect()
+        tb_left, tb_top, tb_w, tb_h = get_taskbar_rect()
+        screen_w = root.winfo_screenwidth()
         screen_h = root.winfo_screenheight()
-        # Place bottom-left above taskbar
-        x = 4
-        y = screen_h - th - widget_h - 4
+
+        # Determine taskbar position (bottom/top/left/right)
+        if tb_top + tb_h >= screen_h - 2:
+            # Taskbar at bottom — place widget above it with 4px clearance
+            x = max(4, screen_w - widget_w - 4)
+            y = tb_top - widget_h - 4
+        elif tb_top <= 2:
+            # Taskbar at top — place widget below it
+            x = max(4, screen_w - widget_w - 4)
+            y = tb_top + tb_h + 4
+        elif tb_left <= 2:
+            # Taskbar on left — place widget to the right
+            x = tb_left + tb_w + 4
+            y = max(4, screen_h - widget_h - 4)
+        else:
+            # Taskbar on right — place widget to the left
+            x = tb_left - widget_w - 4
+            y = max(4, screen_h - widget_h - 4)
+
+        # Clamp to screen bounds
+        x = max(0, min(x, screen_w - widget_w))
+        y = max(0, min(y, screen_h - widget_h))
+
         root.geometry(f"{widget_w}x{widget_h}+{x}+{y}")
         return x, y
 
@@ -591,8 +612,40 @@ if __name__ == "__main__":
             self.root.geometry(f"+{x}+{y}")
 
         def _end_drag(self, event: tk.Event) -> None:
-            self.config.window_x = self.root.winfo_x()
-            self.config.window_y = self.root.winfo_y()
+            x, y = self.root.winfo_x(), self.root.winfo_y()
+            w, h = self.root.winfo_width(), self.root.winfo_height()
+            screen_w, screen_h = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+            tb_left, tb_top, tb_w, tb_h = get_taskbar_rect()
+
+            # Constrain to screen bounds
+            x = max(0, min(x, screen_w - w))
+            y = max(0, min(y, screen_h - h))
+
+            # Enforce taskbar clearance
+            if tb_top + tb_h >= screen_h - 2:
+                # Taskbar at bottom
+                if y + h > tb_top:
+                    y = tb_top - h - 4
+            elif tb_top <= 2:
+                # Taskbar at top
+                if y < tb_top + tb_h:
+                    y = tb_top + tb_h + 4
+            elif tb_left <= 2:
+                # Taskbar on left
+                if x < tb_left + tb_w:
+                    x = tb_left + tb_w + 4
+            else:
+                # Taskbar on right
+                if x + w > tb_left:
+                    x = tb_left - w - 4
+
+            # Final clamp
+            x = max(0, min(x, screen_w - w))
+            y = max(0, min(y, screen_h - h))
+
+            self.config.window_x = x
+            self.config.window_y = y
+            self.root.geometry(f"+{x}+{y}")
             save_config(self.config)
 
         def _post_init_win32(self):
