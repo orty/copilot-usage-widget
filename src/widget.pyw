@@ -21,7 +21,7 @@ from typing import Optional
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 APP_NAME = "Copilot Usage"
-APP_VERSION = "2.0.3"
+APP_VERSION = "2.0.4"
 GITHUB_REPO_URL = "https://github.com/orty/copilot-usage-widget"
 COPILOT_URL = "https://github.com/features/copilot"
 UPDATE_API_URL = "https://api.github.com/repos/orty/copilot-usage-widget/releases/latest"
@@ -390,33 +390,19 @@ def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
     return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
 
 
-def _load_font(px: int):
-    """Load Segoe UI (regular) at the given pixel size.
-
-    A real TrueType font renders crisply when supersampled and downscaled;
-    PIL's bitmap default font looks blurry and heavy at small sizes. Falls
-    back through common Windows fonts, then to the bitmap default.
-    """
-    from PIL import ImageFont
-    for name in ("segoeui.ttf", "tahoma.ttf", "arial.ttf"):
-        try:
-            return ImageFont.truetype(name, px)
-        except OSError:
-            continue
-    return ImageFont.load_default()
-
-
 def render_pill_bar(
     width: int,
     height: int,
     percent_used: float,
     color: str,
     stale: bool = False,
-    overlay_text: str = "",
 ) -> object:
     """Render an anti-aliased pill-shaped progress bar at 4× supersample.
 
-    overlay_text is drawn centered on the bar at final resolution.
+    The percentage text is deliberately NOT baked into this image. Tk draws it
+    natively over the bar (Label compound='center'), so it renders as crisp,
+    properly-weighted ClearType — matching the reference widget — instead of a
+    downscaled PIL glyph that looked either bold-and-blurry or too thin.
     """
     from PIL import Image, ImageDraw, ImageTk
 
@@ -441,17 +427,6 @@ def render_pill_bar(
         mask_draw = ImageDraw.Draw(mask)
         mask_draw.rectangle([0, 0, fill_w, H], fill=255)
         img.paste(clip_img, mask=mask)
-
-    # Overlay text — drawn at 4x supersample, then downscaled with the bar so it
-    # is crisply anti-aliased (no bitmap-font blur) and not stroke-bolded.
-    if overlay_text:
-        font = _load_font(int(height * scale * 0.6))
-        bbox = draw.textbbox((0, 0), overlay_text, font=font)
-        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        tx = (W - tw) // 2 - bbox[0]
-        ty = (H - th) // 2 - bbox[1]
-        draw.text((tx + scale, ty + scale), overlay_text, font=font, fill=(0, 0, 0, 150))  # shadow
-        draw.text((tx, ty), overlay_text, font=font, fill=(255, 255, 255, 255))
 
     img = img.resize((width, height), Image.LANCZOS)
     return ImageTk.PhotoImage(img)
@@ -530,7 +505,7 @@ if __name__ == "__main__":
     SWP_NOACTIVATE = 0x0010
     DWMWA_WINDOW_CORNER_PREFERENCE = 33
     DWMWCP_ROUND = 2
-    KEEP_ON_TOP_MS = 1000  # re-assert topmost so we stay above the taskbar
+    KEEP_ON_TOP_MS = 10  # re-assert topmost within one frame so the taskbar can't cover us
     EDGE_MARGIN = 4        # gap between widget and screen edge
 
     user32 = ctypes.windll.user32
@@ -607,6 +582,7 @@ if __name__ == "__main__":
     DOT_SIZE = 8
     FONT = "Segoe UI"
     FONT_LABEL = (FONT, 9, "bold")
+    FONT_BAR = (FONT, 9, "bold")   # percentage on the bar — matches reference FT_BAR
     FONT_SMALL = (FONT, 8)
     FONT_TITLE = (FONT, 10, "bold")
     FONT_MENU = (FONT, 11)
@@ -673,16 +649,21 @@ if __name__ == "__main__":
             setup_window_flags(hwnd)
             self._hwnd = hwnd
             self._taskbar_progress = self._setup_taskbar_progress()
-            self._keep_on_top()  # start the topmost-watchdog loop
+            # Two-layer defence so the widget never slips behind the taskbar
+            # (mirrors niccolo-sabato/claude-usage-widget):
+            #   1. <Visibility> fires the instant the taskbar covers us →
+            #      re-raise immediately (the click-empty-taskbar case).
+            #   2. a 10ms timer as a safety net for cases Visibility misses.
+            self.root.bind("<Visibility>", lambda e: self._force_topmost())
+            self._keep_on_top()
             # Position will be set on first update_bars call
 
-        def _keep_on_top(self):
-            """Re-assert HWND_TOPMOST periodically.
+        def _force_topmost(self):
+            """Re-assert HWND_TOPMOST + the Tk topmost attribute immediately.
 
-            The Windows taskbar is itself a topmost window, so a one-time
-            topmost flag isn't enough — the widget can slip behind it. Bumping
-            our z-order on a timer keeps the widget sitting *over* the taskbar.
-            SWP_NOACTIVATE means this never steals focus.
+            WS_EX_NOACTIVATE keeps the widget out of the focus chain, so this
+            never steals focus. SetWindowPos with NOMOVE/NOSIZE/NOACTIVATE is a
+            cheap no-op when already on top.
             """
             hwnd = getattr(self, "_hwnd", None)
             if hwnd:
@@ -693,6 +674,16 @@ if __name__ == "__main__":
                     )
                 except Exception:
                     pass
+            try:
+                self.root.attributes("-topmost", True)
+            except Exception:
+                pass
+
+        def _keep_on_top(self):
+            """10ms topmost watchdog. Below the 16ms/60Hz frame budget, so any
+            taskbar-overlap flash is recovered within one frame — imperceptible.
+            """
+            self._force_topmost()
             self.root.after(KEEP_ON_TOP_MS, self._keep_on_top)
 
         def _setup_taskbar_progress(self):
@@ -1107,11 +1098,15 @@ if __name__ == "__main__":
                     overlay = f"{bar.label}: {bar.percent_used:.0f}%"
                 if stale:
                     overlay += " ⚠"
-                img = render_pill_bar(BAR_W, BAR_H, bar.percent_used, color,
-                                      stale=stale, overlay_text=overlay)
+                img = render_pill_bar(BAR_W, BAR_H, bar.percent_used, color, stale=stale)
                 self._bar_images.append(img)
                 w = self._bar_widgets[i]
-                w["bar_lbl"].configure(image=img)
+                # Native Tk text over the pill (compound='center') — crisp,
+                # bold ClearType matching the reference widget.
+                w["bar_lbl"].configure(
+                    image=img, text=overlay, compound="center",
+                    font=FONT_BAR, fg="#ffffff",
+                )
                 self._show_tooltip(w["bar_lbl"], format_bar_count(bar))
                 reset_text = (
                     f"reset {reset_date_utc[:10]} ({calc_reset_countdown(reset_date_utc)})"
