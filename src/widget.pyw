@@ -4,9 +4,11 @@ from __future__ import annotations
 import ctypes
 import json
 import os
+import shutil
 import ssl
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -19,7 +21,7 @@ from typing import Optional
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 APP_NAME = "Copilot Usage"
-APP_VERSION = "2.0.2"
+APP_VERSION = "2.0.3"
 GITHUB_REPO_URL = "https://github.com/orty/copilot-usage-widget"
 COPILOT_URL = "https://github.com/features/copilot"
 UPDATE_API_URL = "https://api.github.com/repos/orty/copilot-usage-widget/releases/latest"
@@ -76,6 +78,24 @@ def _http_get_json(url: str, headers: dict, timeout: int = 15) -> dict:
     req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def _download_file(url: str, dest: Path, timeout: int = 120) -> Path:
+    """Stream a URL to dest (atomically) for the seamless updater.
+
+    Follows GitHub's redirect to the asset CDN. Writes to a .part file first,
+    then renames, so a half-finished download is never run.
+    """
+    req = urllib.request.Request(
+        url, headers={"User-Agent": f"CopilotUsageWidget/{APP_VERSION}",
+                      "Accept": "application/octet-stream"},
+    )
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as resp, \
+            open(tmp, "wb") as f:
+        shutil.copyfileobj(resp, f)
+    os.replace(tmp, dest)
+    return dest
 
 
 # ── QuotaBar dataclass ─────────────────────────────────────────────────────────
@@ -497,6 +517,7 @@ if __name__ == "__main__":
     import ctypes
     import ctypes.wintypes as wintypes
     import tkinter as tk
+    import tkinter.messagebox  # noqa: F401  (registers tk.messagebox)
     from PIL import Image, ImageDraw, ImageTk
 
     # ── Win32 constants ────────────────────────────────────────────────────────
@@ -608,6 +629,7 @@ if __name__ == "__main__":
             self._last_bars: list = []
             self._last_reset: str = ""
             self._available_update: Optional[dict] = None  # set by background update check
+            self._updating = False  # guards against re-entrant update runs
 
             self._frame = tk.Frame(self.root, bg=BG)
             self._frame.pack(padx=PAD, pady=PAD_V)
@@ -890,8 +912,8 @@ if __name__ == "__main__":
             if self._available_update:
                 ver = self._available_update["version"]
                 m.add_command(
-                    label=f"⬆  Update available (v{ver})",
-                    command=self._open_release,
+                    label=f"⬆  Install update (v{ver})",
+                    command=self._apply_update,
                     foreground="#4CAF50",
                 )
             else:
@@ -958,29 +980,72 @@ if __name__ == "__main__":
                 self._available_update = info
 
         def _menu_check_updates(self):
-            """Manual menu trigger — always runs, shows result via messagebox."""
+            """Manual menu trigger — checks, then runs the seamless updater."""
             def _worker():
                 info = check_latest_release()
                 if info is None:
-                    msg = "Could not reach GitHub. Check your connection."
-                    self.root.after(0, lambda m=msg: tk.messagebox.showwarning(APP_NAME, m))
+                    self.root.after(0, lambda: tk.messagebox.showwarning(
+                        APP_NAME, "Could not reach GitHub. Check your connection."))
                 elif is_newer_version(info["version"]):
                     self._available_update = info
-                    msg = f"v{info['version']} is available.\nOpen Releases page to download?"
-                    self.root.after(0, lambda m=msg, i=info: (
-                        tk.messagebox.askyesno(APP_NAME, m) and
-                        webbrowser.open(i.get("html_url", UPDATE_RELEASES_URL))
-                    ))
+                    self.root.after(0, self._apply_update)
                 else:
-                    msg = f"You're up to date (v{APP_VERSION})."
-                    self.root.after(0, lambda m=msg: tk.messagebox.showinfo(APP_NAME, m))
+                    self.root.after(0, lambda: tk.messagebox.showinfo(
+                        APP_NAME, f"You're up to date (v{APP_VERSION})."))
             threading.Thread(target=_worker, daemon=True).start()
 
-        def _open_release(self):
-            if self._available_update:
-                webbrowser.open(self._available_update.get("html_url", UPDATE_RELEASES_URL))
-            else:
-                webbrowser.open(UPDATE_RELEASES_URL)
+        # ── Seamless update: download installer, run it, relaunch ─────────────
+
+        def _apply_update(self):
+            """Download the installer under the hood and run it — no browser."""
+            info = self._available_update
+            if not info:
+                return
+            url = info.get("asset_url")
+            if not url:
+                # Release has no installer asset — fall back to the page.
+                webbrowser.open(info.get("html_url", UPDATE_RELEASES_URL))
+                return
+            if getattr(self, "_updating", False):
+                return  # already in progress
+            if not tk.messagebox.askyesno(
+                APP_NAME,
+                f"Update to v{info['version']} now?\n\n"
+                "Copilot Usage will close, install the update, and reopen.",
+            ):
+                return
+            self._updating = True
+            send_toast(APP_NAME, f"Downloading update v{info['version']}…")
+            threading.Thread(
+                target=self._download_and_install, args=(url,), daemon=True
+            ).start()
+
+        def _download_and_install(self, url: str):
+            try:
+                dest = Path(tempfile.gettempdir()) / UPDATE_ASSET_NAME
+                _download_file(url, dest)
+            except Exception as e:
+                self._updating = False
+                self.root.after(0, lambda err=e: tk.messagebox.showerror(
+                    APP_NAME, f"Update download failed:\n{err}"))
+                return
+            self.root.after(0, lambda: self._run_installer_and_quit(dest))
+
+        def _run_installer_and_quit(self, installer: Path):
+            # /VERYSILENT: no wizard. /CLOSEAPPLICATIONS: free any locked files.
+            # setup.iss relaunches the app afterwards (WizardSilent [Run] entry).
+            try:
+                subprocess.Popen(
+                    [str(installer), "/VERYSILENT", "/SUPPRESSMSGBOXES",
+                     "/NORESTART", "/CLOSEAPPLICATIONS"],
+                    **_no_window_kwargs(),
+                )
+            except Exception as e:
+                self._updating = False
+                tk.messagebox.showerror(APP_NAME, f"Could not start installer:\n{e}")
+                return
+            # Quit so the installer can replace files; it reopens the app.
+            self.root.destroy()
 
         def _poll_once(self):
             stale = False

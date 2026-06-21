@@ -6,7 +6,7 @@
 #define MyAppPublisher "Serge ARADJ"
 #define MyAppExeName   "CopilotUsage.exe"
 #define MyAppIcon      "..\assets\icon.ico"
-#define MyAppRepo      "https://github.com/SergeARADJ/copilot-usage-widget"
+#define MyAppRepo      "https://github.com/orty/copilot-usage-widget"
 
 [Setup]
 AppId={{B7C4E2A1-F3D5-4891-BCDE-COPILOT00001}
@@ -50,7 +50,11 @@ Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
 Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Flags: nowait postinstall skipifsilent
+; Interactive install: offer a "launch now" checkbox on the finish page.
+Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
+; Seamless update (/VERYSILENT): relaunch automatically since the finish page
+; (and its checkbox) never shows.
+Filename: "{app}\{#MyAppExeName}"; Flags: nowait; Check: WizardSilent
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{localappdata}\{#MyAppName}"
