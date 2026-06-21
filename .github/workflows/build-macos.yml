@@ -19,8 +19,6 @@ permissions:
 jobs:
   build:
     runs-on: macos-latest
-    env:
-      CSC_LINK: ${{ secrets.CSC_LINK }}
     steps:
       - uses: actions/checkout@v5
 
@@ -44,10 +42,21 @@ jobs:
         if: env.REL_VERSION != ''
         run: npm pkg set version="${REL_VERSION}"
 
-      # Import the signing certificate only if the secret is present; otherwise build unsigned.
-      - name: Import signing certificate
-        if: ${{ env.CSC_LINK != '' }}
+      # Decide once whether a signing certificate is available. We deliberately do
+      # NOT expose CSC_LINK as an inherited env var: electron-builder treats the mere
+      # presence of CSC_LINK (even empty) as "sign this", then fails trying to decode
+      # the empty value ("... not a file"). So we only set signing env when a real
+      # certificate exists.
+      - name: Detect signing certificate
+        id: detect
         env:
+          HAS_CERT: ${{ secrets.CSC_LINK != '' }}
+        run: echo "signed=$HAS_CERT" >> "$GITHUB_OUTPUT"
+
+      - name: Import signing certificate
+        if: steps.detect.outputs.signed == 'true'
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
         run: |
           KEYCHAIN=build.keychain
@@ -58,18 +67,15 @@ jobs:
           security import cert.p12 -k $KEYCHAIN -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions $KEYCHAIN
           security find-identity -v -p codesigning $KEYCHAIN
+          echo "CSC_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
 
       - name: Build (DMG, arm64 + x64)
         run: npm run build:mac
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          # When no certificate is provided, build an unsigned app and tell
-          # electron-builder not to hunt for a signing identity (which otherwise
-          # fails the build). When a cert is present, signing proceeds normally.
-          CSC_IDENTITY_AUTO_DISCOVERY: ${{ env.CSC_LINK != '' }}
-          CSC_KEYCHAIN: ${{ env.CSC_LINK != '' && 'build.keychain' || '' }}
+          # true → identity discovered from the imported keychain; false → unsigned app.
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ steps.detect.outputs.signed }}
+          # Notarization (only effective when signed and these secrets are set).
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
