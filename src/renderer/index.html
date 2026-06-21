@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'none';"
+    />
+    <title>Copilot Usage</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="widget-container" id="widget">
+      <!-- Title bar (drag handle + window controls) -->
+      <div class="title-bar">
+        <div class="title-left">
+          <img src="../../assets/copilot-logo.svg" class="app-logo" alt="" />
+          <span class="app-title">Copilot Usage</span>
+          <span class="unofficial">unofficial</span>
+        </div>
+        <div class="title-controls">
+          <button id="refreshBtn" class="ctrl-btn" title="Refresh">⟳</button>
+          <button id="compactBtn" class="ctrl-btn" title="Compact mode">▭</button>
+          <button id="settingsBtn" class="ctrl-btn" title="Settings">⚙</button>
+          <button id="minimizeBtn" class="ctrl-btn" title="Minimize">—</button>
+          <button id="closeBtn" class="ctrl-btn close" title="Close">✕</button>
+        </div>
+      </div>
+
+      <!-- Loading -->
+      <div id="loadingContainer" class="view">
+        <div class="spinner"></div>
+        <div class="muted">Loading…</div>
+      </div>
+
+      <!-- Login -->
+      <div id="loginContainer" class="view" style="display: none">
+        <div id="loginStep1" class="login-step">
+          <p class="login-title">Connect your GitHub account</p>
+          <p class="muted small">
+            Reads your Copilot premium-request quota. Nothing leaves your machine
+            except the request to GitHub.
+          </p>
+          <button id="detectBtn" class="primary-btn">Detect via GitHub CLI</button>
+          <button id="manualBtn" class="link-btn">Enter a token manually →</button>
+          <p id="loginError" class="error-text"></p>
+        </div>
+        <div id="loginStep2" class="login-step" style="display: none">
+          <p class="login-title">Paste a GitHub token</p>
+          <p class="muted small">
+            A fine-grained or classic token (or the value of <code>gh auth token</code>)
+            with Copilot access.
+          </p>
+          <input
+            id="tokenInput"
+            class="token-input"
+            type="password"
+            placeholder="ghp_… / gho_…"
+            spellcheck="false"
+            autocomplete="off"
+          />
+          <div class="row">
+            <button id="backBtn" class="link-btn">← Back</button>
+            <button id="saveTokenBtn" class="primary-btn">Save</button>
+          </div>
+          <p id="loginError2" class="error-text"></p>
+        </div>
+      </div>
+
+      <!-- No usage -->
+      <div id="noUsageContainer" class="view" style="display: none">
+        <p class="login-title">No quota to show</p>
+        <p class="muted small">
+          This account has no limited Copilot quotas (everything is unlimited),
+          or no data was returned yet.
+        </p>
+      </div>
+
+      <!-- Main content -->
+      <div id="mainContent" class="view" style="display: none">
+        <div class="col-headers">
+          <span class="ch-metric">Metric</span>
+          <span class="ch-used">Used</span>
+          <span class="ch-remaining">Remaining</span>
+          <span class="ch-resets">Resets in</span>
+          <span class="ch-timer"></span>
+        </div>
+        <div id="metricRows"></div>
+
+        <button id="expandToggle" class="expand-toggle" style="display: none">
+          <span class="chev">▾</span> All quotas
+        </button>
+        <div id="expandSection" class="expand-section" style="display: none">
+          <div id="extraRows"></div>
+        </div>
+
+        <div id="graphSection" class="graph-section" style="display: none">
+          <canvas id="usageChart" height="90"></canvas>
+        </div>
+
+        <div id="updateBanner" class="update-banner" style="display: none">
+          <span id="updateText">Update available</span>
+          <button id="updateLink" class="link-btn">Download</button>
+        </div>
+      </div>
+
+      <!-- Compact content -->
+      <div id="compactContent" class="view compact" style="display: none">
+        <div class="compact-row">
+          <span class="compact-label" id="compactLabel1">Premium</span>
+          <div class="compact-bar-bg"><div class="compact-bar-fill" id="compactFill1"></div></div>
+          <span class="compact-pct" id="compactPct1">—</span>
+        </div>
+        <div class="compact-row" id="compactRow2">
+          <span class="compact-label" id="compactLabel2">—</span>
+          <div class="compact-bar-bg"><div class="compact-bar-fill weekly" id="compactFill2"></div></div>
+          <span class="compact-pct" id="compactPct2">—</span>
+        </div>
+      </div>
+
+      <!-- Settings overlay -->
+      <div id="settingsOverlay" class="overlay" style="display: none">
+        <div class="overlay-head">
+          <span>Settings</span>
+          <button id="settingsClose" class="ctrl-btn">✕</button>
+        </div>
+        <div class="settings-grid">
+          <label class="set"><input type="checkbox" id="setAutoStart" /> Launch at startup</label>
+          <label class="set"><input type="checkbox" id="setMinimizeToTray" /> Hide from taskbar</label>
+          <label class="set"><input type="checkbox" id="setAlwaysOnTop" /> Always on top</label>
+          <label class="set"><input type="checkbox" id="setUsageAlerts" /> Usage alerts</label>
+          <label class="set"><input type="checkbox" id="setGraphVisible" /> Show history graph</label>
+          <label class="set"><input type="checkbox" id="setShowTrayStats" /> Show % in tray</label>
+          <label class="set">
+            Theme
+            <select id="setTheme">
+              <option value="dark">Dark</option>
+              <option value="light">Light</option>
+              <option value="system">System</option>
+            </select>
+          </label>
+          <label class="set">
+            Refresh
+            <select id="setRefreshInterval">
+              <option value="30">30s</option>
+              <option value="60">1m</option>
+              <option value="120">2m</option>
+              <option value="180">3m</option>
+              <option value="300">5m</option>
+            </select>
+          </label>
+          <label class="set">
+            Warn at %
+            <input type="number" id="setWarnThreshold" min="1" max="100" />
+          </label>
+          <label class="set">
+            Danger at %
+            <input type="number" id="setDangerThreshold" min="1" max="100" />
+          </label>
+          <label class="set">
+            Time format
+            <select id="setTimeFormat">
+              <option value="12h">12h</option>
+              <option value="24h">24h</option>
+            </select>
+          </label>
+        </div>
+        <div class="overlay-foot">
+          <button id="openCopilot" class="link-btn">Copilot</button>
+          <button id="openRepo" class="link-btn">GitHub repo</button>
+          <button id="logoutBtn" class="link-btn danger">Log out</button>
+          <span id="versionLabel" class="muted small"></span>
+        </div>
+        <p class="muted small disclaimer">
+          Unofficial tool — not affiliated with GitHub or Microsoft.
+        </p>
+      </div>
+
+      <!-- Compact settings overlay -->
+      <div id="compactSettingsOverlay" class="overlay compact-overlay" style="display: none">
+        <div class="overlay-head">
+          <span>Quick settings</span>
+          <button id="compactSettingsClose" class="ctrl-btn">✕</button>
+        </div>
+        <label class="set"><input type="checkbox" id="csAlwaysOnTop" /> Always on top</label>
+        <label class="set"><input type="checkbox" id="csUsageAlerts" /> Usage alerts</label>
+        <button id="csExpand" class="link-btn">Back to full view</button>
+      </div>
+    </div>
+
+    <script src="../../node_modules/chart.js/dist/chart.umd.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

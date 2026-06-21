@@ -1,28 +1,19 @@
 # Assets
 
-This directory contains build assets for the Windows installer.
+Icons and images for the Electron app, consumed by `electron-builder` (see the `build`
+field in `package.json`) and the renderer.
 
-## Required Files
+| File | Used for |
+| --- | --- |
+| `icon.ico` | Windows app icon (NSIS + portable) |
+| `icon.png` | macOS icon master (1024×1024; electron-builder converts to `.icns`) |
+| `logo.png` | Linux app icon + in‑app logo |
+| `copilot-logo.svg` | Title‑bar logo in the renderer |
+| `tray-icon.png` | Windows tray base image |
+| `tray-icon-mac.png` | macOS tray base image (template‑style) |
+| `tray-icon-linux.png` | Linux tray base image |
 
-### icon.ico
+The live usage percentage is drawn onto the tray icons at runtime (see
+`src/tray-icon.js`), so the tray base images are just the unbadged starting point.
 
-**Status:** Must be provided before building.
-
-A 32×32 pixel `.ico` file must be placed in this directory as `icon.ico` before running the build pipeline (`scripts/build.ps1`). The build will fail without it.
-
-The icon should represent the Copilot Usage widget application. You can create one using:
-- An online ICO converter (e.g., convertio.co)
-- ImageMagick: `magick -size 32x32 xc:blue icon.ico`
-- PyQt5's built-in icon tools
-- Professional icon design tools (Adobe Illustrator, Figma)
-
-Example placeholder generation (requires ImageMagick):
-```powershell
-magick -size 32x32 xc:blue -fill white -pointsize 16 -gravity center -annotate +0+0 "C" icon.ico
-```
-
-## Build Process
-
-The `build.ps1` script references `assets/icon.ico`. If the file is missing, either:
-1. Provide a valid `.ico` file (recommended)
-2. Temporarily remove the `--icon` flag from `build.ps1`
+These were generated with Pillow; regenerate them with a similar script if you re‑brand.
