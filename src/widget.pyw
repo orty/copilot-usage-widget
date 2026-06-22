@@ -17,11 +17,11 @@ import webbrowser
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 APP_NAME = "Copilot Usage"
-APP_VERSION = "2.0.4"
+APP_VERSION = "2.0.6"
 GITHUB_REPO_URL = "https://github.com/orty/copilot-usage-widget"
 COPILOT_URL = "https://github.com/features/copilot"
 UPDATE_API_URL = "https://api.github.com/repos/orty/copilot-usage-widget/releases/latest"
@@ -226,7 +226,7 @@ def humanize_label(quota_id: str) -> str:
     return quota_id.replace("_", " ").title()
 
 
-def fetch_user_data(token: str) -> dict:
+def fetch_user_data(token: str) -> dict[str, Any]:
     """Fetch user quota data from GitHub API.
 
     Uses urllib instead of a curl subprocess so no console window flashes on
@@ -602,7 +602,7 @@ if __name__ == "__main__":
             self._dot_image = None
             self._dot_alpha = 255
             self._dot_direction = -1
-            self._last_bars: list = []
+            self._last_bars: list[QuotaBar] = []
             self._last_reset: str = ""
             self._available_update: Optional[dict] = None  # set by background update check
             self._updating = False  # guards against re-entrant update runs
@@ -1039,14 +1039,17 @@ if __name__ == "__main__":
             self.root.destroy()
 
         def _poll_once(self):
+            threading.Thread(target=self._poll_worker, daemon=True).start()
+
+        def _poll_worker(self):
             stale = False
             bars: list[QuotaBar] = []
-            reset_date_utc = ""
+            reset_date_utc: str = ""
             try:
                 token = ensure_authenticated(self.config)
                 data = fetch_user_data(token)
                 bars = parse_quotas(data)
-                reset_date_utc = data.get("quota_reset_date_utc", "")
+                reset_date_utc = str(data.get("quota_reset_date_utc", ""))
                 self.config.oauth_token = token
 
                 for bar in bars:
@@ -1064,11 +1067,17 @@ if __name__ == "__main__":
                 save_config(self.config)
             except RuntimeError:
                 stale = True
-                bars = getattr(self, "_last_bars", [])
-                if not bars:
-                    self.root.title("Copilot Usage — Check gh auth")
-                reset_date_utc = getattr(self, "_last_reset", "")
+                bars = self._last_bars
+                reset_date_utc = self._last_reset
 
+            _bars, _reset, _stale = bars, reset_date_utc, stale
+            self.root.after(0, lambda: self._poll_done(_bars, _reset, _stale))
+
+        def _poll_done(self, bars: list[QuotaBar], reset_date_utc: str, stale: bool):
+            if not bars and stale:
+                self.root.title("Copilot Usage — Check gh auth")
+                self._schedule_next_poll()
+                return
             if bars:
                 self._last_bars = bars
                 self._last_reset = reset_date_utc
