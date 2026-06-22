@@ -778,10 +778,10 @@ if __name__ == "__main__":
                          padx=(0, PAD if i < len(bars) - 1 else 0),
                          pady=0)
 
-                bar_lbl = tk.Label(col, bg=BG)
+                bar_lbl = tk.Label(col, bg=BG, pady=0)
                 bar_lbl.pack(anchor="w", pady=0)
 
-                reset_lbl = tk.Label(col, text="", bg=BG, fg="#888888",
+                reset_lbl = tk.Label(col, text="", bg=BG, fg="#d0d0ce",
                                      font=FONT_SMALL, pady=0)
                 reset_lbl.pack(anchor="w", pady=0)
 
@@ -825,7 +825,7 @@ if __name__ == "__main__":
                 bar_lbl = tk.Label(self._frame, bg=BG)
                 bar_lbl.grid(row=row, column=1, sticky="w", padx=(PAD, 0))
 
-                reset_lbl = tk.Label(self._frame, text="", bg=BG, fg="#888888", font=FONT_SMALL)
+                reset_lbl = tk.Label(self._frame, text="", bg=BG, fg="#d0d0ce", font=FONT_SMALL)
                 reset_lbl.grid(row=row + 100, column=0, columnspan=2, sticky="w", pady=(0, PAD))
 
                 self._bar_widgets.append({
@@ -1108,10 +1108,16 @@ if __name__ == "__main__":
                     font=FONT_BAR, fg="#ffffff",
                 )
                 self._show_tooltip(w["bar_lbl"], format_bar_count(bar))
-                reset_text = (
-                    f"reset {reset_date_utc[:10]} ({calc_reset_countdown(reset_date_utc)})"
-                    if reset_date_utc else "reset unknown"
-                )
+                compact = len(bars) > 1 and self.config.display_mode != "standard"
+                if reset_date_utc:
+                    countdown = calc_reset_countdown(reset_date_utc)
+                    reset_text = (
+                        f"reset {countdown}"
+                        if compact
+                        else f"reset {reset_date_utc[:10]} ({countdown})"
+                    )
+                else:
+                    reset_text = "reset unknown"
                 w["reset_lbl"].configure(text=reset_text)
 
             if needs_anchor:
